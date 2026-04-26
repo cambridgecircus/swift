@@ -173,7 +173,7 @@ export default function Home() {
       setLastRefreshedAt(new Date());
     } catch (error) {
       console.error(error);
-      alert("Failed to refresh intelligence. Please check the terminal logs.");
+      alert("Failed to generate the on-screen report. Please check the terminal logs.");
     } finally {
       setRefreshing(false);
     }
@@ -238,21 +238,11 @@ export default function Home() {
                       onClick={refreshIntelligencePreview}
                       disabled={refreshing}
                     >
-                      {refreshing
-                        ? "Refreshing..."
-                        : "Refresh Intelligence & Send Report"}
+                      {refreshing ? "Generating..." : "Generate Latest Report"}
                     </PrimaryButton>
                     <p className={`text-xs leading-relaxed ${dt.muted}`}>
-                      For now this calls{" "}
-                      <span className="font-semibold text-slate-200">
-                        /api/generate-report
-                      </span>{" "}
-                      (no secrets exposed). Email sending is handled by the
-                      protected{" "}
-                      <span className="font-semibold text-slate-200">
-                        /api/daily-report
-                      </span>{" "}
-                      cron endpoint.
+                      This refreshes the on-screen intelligence report. Email delivery runs via
+                      the protected daily report endpoint and Vercel Cron.
                     </p>
                   </div>
                 }
