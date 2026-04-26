@@ -198,3 +198,15 @@ export type SourceRegistryItem = {
   notes: string;
 };
 
+export type SourceHealthStatus = "ok" | "failed" | "disabled" | "unknown";
+
+export type SourceHealthResult = {
+  sourceId: string;
+  sourceName: string;
+  url: string;
+  status: SourceHealthStatus;
+  itemCount: number;
+  errorMessage?: string;
+  checkedAt: string;
+};
+

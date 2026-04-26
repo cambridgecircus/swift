@@ -41,9 +41,9 @@ export const sourceRegistry: SourceRegistryItem[] = [
     usedBy: ["dashboard", "learning_assets", "skills_to_pick_up"],
     qualityTier: "Tier 1",
     url: "https://a16zcrypto.com/feed/",
-    enabled: true,
+    enabled: false,
     accessType: "public",
-    notes: "Crypto thesis, policy, infrastructure and market structure.",
+    notes: "Disabled temporarily because the current RSS URL returned HTTP 404. Needs verified feed URL.",
   },
   {
     id: "coinmarketcap_api",
@@ -290,9 +290,9 @@ export const sourceRegistry: SourceRegistryItem[] = [
     usedBy: ["dashboard", "learning_assets", "skills_to_pick_up"],
     qualityTier: "Tier 2",
     url: "https://www.hackinghr.io/blog/rss.xml",
-    enabled: true,
+    enabled: false,
     accessType: "public",
-    notes: "Future of work and HR innovation.",
+    notes: "Disabled temporarily because the current RSS URL returned HTTP 404. Needs verified feed URL.",
   },
 
   {

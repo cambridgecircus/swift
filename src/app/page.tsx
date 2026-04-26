@@ -631,6 +631,40 @@ export default function Home() {
                 </InfoCard>
 
                 <InfoCard
+                  title="Source Health"
+                  subtitle="Quality control for enabled RSS sources (non-interactive)."
+                >
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Source health
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        How to inspect
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">
+                        /api/debug/source-health
+                      </p>
+                      <p className="mt-2 text-xs text-slate-400">
+                        Safe to call from the browser. No secrets.
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Known disabled sources
+                      </p>
+                      <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-200">
+                        <li>a16z crypto — pending verified feed URL</li>
+                        <li>Hacking HR — pending verified feed URL</li>
+                      </ul>
+                    </div>
+                  </div>
+                </InfoCard>
+
+                <InfoCard
                   title="Source Registry"
                   subtitle="High-quality source inventory for SWIFT (registry only — ingestion comes next)."
                 >

@@ -1,7 +1,13 @@
 import { XMLParser } from "fast-xml-parser";
 
 import { getRssSources } from "@/lib/sourceRegistry";
-import type { CleanMarketSignal, MarketCategory, RawMarketItem } from "@/lib/types";
+import type {
+  CleanMarketSignal,
+  MarketCategory,
+  RawMarketItem,
+  SourceHealthResult,
+  SourceHealthStatus,
+} from "@/lib/types";
 
 type RssSource = ReturnType<typeof getRssSources>[number];
 
@@ -81,6 +87,21 @@ function normalizeAtomEntries(parsed: Record<string, unknown>) {
   return asArray(entries as unknown);
 }
 
+function extractFeedEntries(parsed: Record<string, unknown>) {
+  const rssEntries = normalizeRssItems(parsed);
+  const atomEntries = normalizeAtomEntries(parsed);
+  return [...rssEntries, ...atomEntries];
+}
+
+async function fetchAndParseSource(source: RssSource) {
+  const res = await fetch(source.url, { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const xml = await res.text();
+  const parsed = parseFeedXml(xml);
+  const entries = extractFeedEntries(parsed);
+  return { parsed, entries };
+}
+
 function normalizeRawItem({
   source,
   entry,
@@ -136,19 +157,9 @@ export async function fetchRssSources(): Promise<RawMarketItem[]> {
   await Promise.all(
     sources.map(async (source) => {
       try {
-        const res = await fetch(source.url, { cache: "no-store" });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const xml = await res.text();
-        const parsed = parseFeedXml(xml);
-
-        const rssItems = normalizeRssItems(parsed).map((entry) =>
-          normalizeRawItem({ source, entry }),
-        );
-        const atomItems = normalizeAtomEntries(parsed).map((entry) =>
-          normalizeRawItem({ source, entry }),
-        );
-
-        for (const raw of [...rssItems, ...atomItems]) {
+        const { entries } = await fetchAndParseSource(source);
+        const normalized = entries.map((entry) => normalizeRawItem({ source, entry }));
+        for (const raw of normalized) {
           if (raw) items.push(raw);
         }
       } catch (error) {
@@ -158,6 +169,52 @@ export async function fetchRssSources(): Promise<RawMarketItem[]> {
   );
 
   return items;
+}
+
+export async function getRssSourceHealth(): Promise<SourceHealthResult[]> {
+  const checkedAt = new Date().toISOString();
+  const sources = getRssSources();
+
+  const results = await Promise.all(
+    sources.map(async (source) => {
+      if (!source.enabled) {
+        return {
+          sourceId: source.id,
+          sourceName: source.name,
+          url: source.url,
+          status: "disabled" as const satisfies SourceHealthStatus,
+          itemCount: 0,
+          checkedAt,
+        };
+      }
+
+      try {
+        const { entries } = await fetchAndParseSource(source);
+        return {
+          sourceId: source.id,
+          sourceName: source.name,
+          url: source.url,
+          status: "ok" as const satisfies SourceHealthStatus,
+          itemCount: entries.length,
+          checkedAt,
+        };
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : `Unknown error: ${String(error)}`;
+        return {
+          sourceId: source.id,
+          sourceName: source.name,
+          url: source.url,
+          status: "failed" as const satisfies SourceHealthStatus,
+          itemCount: 0,
+          errorMessage: message,
+          checkedAt,
+        };
+      }
+    }),
+  );
+
+  return results;
 }
 
 const WEB3_AI_KEYWORDS = [

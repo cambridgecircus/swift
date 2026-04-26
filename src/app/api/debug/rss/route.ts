@@ -1,5 +1,5 @@
 import { getRssSources } from "@/lib/sourceRegistry";
-import { cleanMarketSignals, fetchRssSources } from "@/lib/rssIngestion";
+import { cleanMarketSignals, fetchRssSources, getRssSourceHealth } from "@/lib/rssIngestion";
 
 export async function GET() {
   const enabledRssSources = getRssSources()
@@ -8,12 +8,17 @@ export async function GET() {
 
   const raw = await fetchRssSources();
   const cleaned = cleanMarketSignals(raw);
+  const sourceHealthAll = await getRssSourceHealth();
+  const sourceHealth = sourceHealthAll.filter((s) =>
+    enabledRssSources.some((e) => e.id === s.sourceId),
+  );
 
   return Response.json({
     status: "ok",
     rawCount: raw.length,
     cleanedCount: cleaned.length,
     enabledRssSources,
+    sourceHealth,
     topSignals: cleaned.slice(0, 10),
   });
 }
