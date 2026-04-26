@@ -634,6 +634,37 @@ export default function Home() {
                   title="Source Registry"
                   subtitle="High-quality source inventory for SWIFT (registry only — ingestion comes next)."
                 >
+                  <div className="mb-4 grid gap-3 md:grid-cols-4">
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        RSS ingestion
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Cleaning rules
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        AI analysis
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">
+                        Not connected yet
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Storage
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">
+                        Not connected yet
+                      </p>
+                    </div>
+                  </div>
+
                   <div className="grid gap-3 md:grid-cols-4">
                     <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">

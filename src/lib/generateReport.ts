@@ -13,6 +13,55 @@ export type IntelligenceReport = {
 };
 
 export async function generateReport(): Promise<IntelligenceReport> {
+  const { getCleanedMarketSignals } = await import("@/lib/rssIngestion");
+
+  const cleanedSignals = await getCleanedMarketSignals();
+
+  if (cleanedSignals.length > 0) {
+    const topSignals = cleanedSignals.slice(0, 5);
+
+    const tagCounts = new Map<string, number>();
+    for (const s of topSignals) {
+      for (const t of s.tags) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1);
+    }
+
+    const dominantTags = Array.from(tagCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([tag]) => tag);
+
+    const keySignals: KeySignal[] = topSignals.map((s) => ({
+      title: s.title,
+      source: s.sourceName,
+      implication: s.hrbpImplication,
+    }));
+
+    const recommendations: string[] = [
+      dominantTags.includes("AI")
+        ? "Identify which roles need AI literacy and which workflows can be augmented."
+        : "Translate the top market signals into 1–2 operating model decisions for leaders this week.",
+      dominantTags.includes("Regulation") || dominantTags.includes("Compliance")
+        ? "Pressure-test workforce plans for compliance, risk, legal, and institutional capability needs."
+        : "Review capability gaps against current hiring plans and prioritise critical roles.",
+      dominantTags.includes("Hiring") || dominantTags.includes("Talent")
+        ? "Compare hiring signals against retention risk and internal mobility opportunities."
+        : "Turn signals into a short decision memo: what changes, what stays the same, what to monitor.",
+      "Use this as a rules-based baseline; AI analysis is not connected yet.",
+    ];
+
+    return {
+      generatedAt: new Date().toISOString(),
+      headline: `Live RSS signals detected (${cleanedSignals.length}) — top themes: ${dominantTags.join(
+        ", ",
+      )}`,
+      executiveSummary: `This report ingested ${cleanedSignals.length} cleaned RSS signals and selected the top ${topSignals.length} by relevance score. Dominant tags: ${dominantTags.join(
+        ", ",
+      )}. This is a deterministic, non-AI, rules-based summary (keyword scoring + deduplication).`,
+      keySignals,
+      hrbpRecommendations: recommendations,
+    };
+  }
+
   const mockSignals: KeySignal[] = [
     {
       title: "AI-native operating models are moving from experiment to execution",
