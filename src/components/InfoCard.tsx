@@ -26,18 +26,18 @@ export default function InfoCard({
         className,
       ].join(" ")}
     >
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <header className="flex flex-col gap-3.5 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-100">{title}</p>
+          <p className={`text-[0.9375rem] font-semibold tracking-tight ${dt.textPrimary}`}>{title}</p>
           {subtitle ? (
-            <p className={`mt-1.5 text-xs leading-relaxed sm:text-sm ${dt.muted}`}>
+            <p className={`mt-2 text-xs leading-relaxed sm:text-sm ${dt.muted}`}>
               {subtitle}
             </p>
           ) : null}
         </div>
         {right ? <div className="shrink-0 sm:pt-0.5">{right}</div> : null}
       </header>
-      {children ? <div className="mt-5">{children}</div> : null}
+      {children ? <div className="mt-6">{children}</div> : null}
     </section>
   );
 }

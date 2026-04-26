@@ -1,5 +1,4 @@
-import { generateReport } from "@/lib/generateReport";
-import { sendReportEmail } from "@/lib/sendReportEmail";
+import { runReportAndSendEmail } from "@/lib/reportRunner";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -8,24 +7,28 @@ export async function GET(request: Request) {
   if (!expectedSecret) {
     return Response.json(
       { status: "error", message: "Missing CRON_SECRET" },
-      { status: 500 }
+      { status: 500 },
     );
   }
 
   if (authHeader !== `Bearer ${expectedSecret}`) {
-    return Response.json(
-      { status: "error", message: "Unauthorized" },
-      { status: 401 }
-    );
+    return Response.json({ status: "error", message: "Unauthorized" }, { status: 401 });
   }
 
-  const report = await generateReport();
-  const emailResult = await sendReportEmail(report);
+  const result = await runReportAndSendEmail({ runType: "scheduled" });
+
+  if (result.status !== "ok") {
+    return Response.json(
+      { status: "error", message: result.message },
+      { status: 500 },
+    );
+  }
 
   return Response.json({
     status: "ok",
     message: "Daily report generated and email sent successfully.",
-    emailResult,
-    report,
+    emailResult: result.emailResult,
+    report: result.report,
+    storage: result.storage,
   });
 }

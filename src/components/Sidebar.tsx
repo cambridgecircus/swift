@@ -17,7 +17,7 @@ export type NavItem = {
   icon?: ReactNode;
 };
 
-const baseItemClasses =
+const navItemLayout =
   "flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition";
 
 function NavList({
@@ -38,15 +38,12 @@ function NavList({
             <button
               type="button"
               onClick={() => onSelect(item.key)}
-              className={[
-                baseItemClasses,
-                isActive
-                  ? `${dt.accentBorder} ${dt.accentSoftBg} text-cyan-100`
-                  : "text-slate-200 hover:bg-white/5 hover:text-white",
-              ].join(" ")}
+              className={[navItemLayout, isActive ? dt.sidebarNavActive : dt.sidebarNavIdle].join(
+                " ",
+              )}
             >
               <span
-                className={`grid h-8 w-8 place-items-center rounded-lg ${dt.border} bg-white/5 text-slate-200`}
+                className={isActive ? dt.sidebarIconChipActive : dt.sidebarIconChip}
               >
                 {item.icon ?? (
                   <span className="text-[10px] font-bold tracking-wide">
@@ -55,9 +52,7 @@ function NavList({
                 )}
               </span>
               <span className="flex-1 text-left">{item.label}</span>
-              {isActive ? (
-                <span className={`text-[11px] ${dt.accentText}`}>Active</span>
-              ) : null}
+              {isActive ? <span className={dt.navActiveLabel}>Active</span> : null}
             </button>
           </li>
         );
@@ -90,13 +85,13 @@ function SidebarInner({
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <p className={`text-xs font-semibold tracking-[0.25em] ${dt.muted}`}>SWIFT</p>
-            <p className="mt-1 truncate text-lg font-semibold text-slate-100">
+            <p className={`mt-1 truncate text-lg font-semibold ${dt.textPrimary}`}>
               Executive Console
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <div
-              className={`rounded-full ${dt.border} bg-white/5 px-3 py-1 text-[11px] text-slate-300`}
+              className={`rounded-full ${dt.border} border-[color:var(--swift-border-subtle)] bg-[rgba(255,255,255,0.04)] px-3 py-1 text-[11px] text-[color:var(--swift-text-secondary)]`}
             >
               v0.2
             </div>
@@ -104,17 +99,19 @@ function SidebarInner({
               <button
                 type="button"
                 onClick={onCloseMobile}
-                className={`rounded-lg ${dt.border} px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/5`}
+                className={`rounded-lg ${dt.border} border-[color:var(--swift-border-subtle)] px-2.5 py-1.5 text-xs font-semibold text-[color:var(--swift-text-secondary)] transition hover:border-[color:rgba(254,44,85,0.28)] hover:bg-[rgba(254,44,85,0.06)] hover:text-[color:var(--swift-text-primary)]`}
               >
                 Close
               </button>
             ) : null}
           </div>
         </div>
-        <div className={`mt-4 ${dt.cardRadius} ${dt.border} bg-white/5 p-3`}>
-          <p className="text-xs font-semibold text-slate-200">Intelligence Loop</p>
+        <div
+          className={`${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[rgba(17,19,34,0.55)] p-3 shadow-[inset_0_1px_0_0_rgba(37,244,238,0.06)]`}
+        >
+          <p className={`text-xs font-semibold ${dt.textPrimary}`}>Intelligence loop</p>
           <p className={`mt-1 text-xs leading-5 ${dt.muted}`}>
-            Single-page mock shell. Data is staged; routing comes next.
+            Briefings, roles, skills and learning in one workspace—refreshed on demand.
           </p>
         </div>
       </div>
@@ -124,8 +121,10 @@ function SidebarInner({
       </nav>
 
       <div className="px-5 pb-6">
-        <div className={`${dt.cardRadius} ${dt.border} bg-white/5 p-4`}>
-          <p className="text-xs font-semibold text-slate-200">Premium workspace</p>
+        <div
+          className={`${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[rgba(17,19,34,0.45)] p-4 shadow-[inset_0_1px_0_0_rgba(254,44,85,0.05)]`}
+        >
+          <p className={`text-xs font-semibold ${dt.textPrimary}`}>Premium workspace</p>
           <p className={`mt-1 text-xs leading-5 ${dt.muted}`}>
             Built for HRBP operators navigating Web3 x AI shifts.
           </p>
@@ -153,7 +152,7 @@ export default function Sidebar({
     <>
       {/* Desktop: sticky rail */}
       <aside
-        className={`relative hidden h-screen w-72 shrink-0 border-r ${dt.border} bg-slate-950/70 backdrop-blur md:flex`}
+        className={`relative hidden h-screen w-72 shrink-0 border-r ${dt.sidebarShell} md:flex`}
       >
         <SidebarInner active={active} items={items} onSelect={onSelect} />
       </aside>
@@ -164,11 +163,11 @@ export default function Sidebar({
           <button
             type="button"
             aria-label="Close navigation"
-            className="absolute inset-0 bg-slate-950/75 backdrop-blur-sm"
+            className="absolute inset-0 bg-[rgba(5,5,7,0.78)] backdrop-blur-sm"
             onClick={onMobileClose}
           />
           <aside
-            className={`absolute left-0 top-0 flex h-full w-[min(20rem,88vw)] max-w-full flex-col ${dt.border} border-r bg-slate-950 shadow-2xl`}
+            className={`absolute left-0 top-0 flex h-full w-[min(20rem,88vw)] max-w-full flex-col border-r ${dt.sidebarShell} shadow-2xl shadow-[rgba(37,244,238,0.08)]`}
           >
             <SidebarInner
               active={active}

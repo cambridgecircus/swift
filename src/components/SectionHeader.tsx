@@ -13,15 +13,17 @@ export default function SectionHeader({
 }) {
   return (
     <div
-      className={`flex flex-col gap-5 border-b ${dt.border} pb-6 md:flex-row md:items-end md:justify-between`}
+      className={`flex flex-col gap-6 border-b ${dt.border} pb-7 md:flex-row md:items-end md:justify-between`}
     >
       <div className="min-w-0">
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl md:text-[1.75rem] md:leading-tight">
+        <h1
+          className={`text-2xl font-semibold tracking-tight ${dt.textPrimary} sm:text-3xl md:text-[1.75rem] md:leading-tight`}
+        >
           {title}
         </h1>
         {subtitle ? (
           <div
-            className={`mt-2 max-w-3xl text-sm leading-relaxed sm:text-[0.9375rem] ${dt.muted}`}
+            className={`mt-3 max-w-3xl text-sm leading-relaxed sm:text-[0.9375rem] ${dt.muted}`}
           >
             {subtitle}
           </div>

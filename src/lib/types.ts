@@ -87,6 +87,40 @@ export type JobOpportunity = {
   recommendedAction: string;
 };
 
+/** Raw row from a job board fetch before SWIFT filtering (ingestion v1). */
+export type RawJobItem = {
+  id: string;
+  role: string;
+  company: string;
+  location: string;
+  sourceName: string;
+  sourceUrl: string;
+  applyUrl: string;
+  descriptionSnippet?: string;
+  dateFound: string;
+  rawText?: string;
+};
+
+/** Normalised live opportunity after profile + apply validation (ingestion v1). */
+export type CleanJobOpportunity = {
+  id: string;
+  role: string;
+  company: string;
+  location: string;
+  source: string;
+  sourceUrl: string;
+  applyUrl: string;
+  dateFound: string;
+  fitScore: number;
+  whyThisFits: string;
+  gaps: string[];
+  recommendedAction: string;
+  /** Board-sourced rows are `live`; LinkedIn email imports use `to_review`. */
+  status: "live" | "to_review";
+  /** Set for LinkedIn email imports when role/company/location could not be parsed reliably. */
+  needsLinkedInReview?: boolean;
+};
+
 export type JobMarketTakeaway = {
   id: string;
   takeaway: string;
@@ -172,7 +206,8 @@ export type SourceType =
   | "website"
   | "newsletter"
   | "job_board"
-  | "manual";
+  | "manual"
+  | "email_alert";
 
 export type SourceTopic = "web3" | "ai" | "hr" | "jobs" | "learning";
 
@@ -195,7 +230,7 @@ export type SourceRegistryItem = {
   qualityTier: QualityTier;
   url: string;
   enabled: boolean;
-  accessType: "public" | "api_key_required" | "manual_review";
+  accessType: "public" | "api_key_required" | "manual_review" | "email_alert";
   notes: string;
 };
 
@@ -285,6 +320,27 @@ export type NeedsManualReviewJob = {
   reason: string;
 };
 
+export type EmploymentLawReportItem = {
+  title: string;
+  sourceName: string;
+  sourceUrl: string;
+  whatChanged: string;
+  whyItMatters: string;
+  hrbpImplication: string;
+  suggestedAction: string;
+  jurisdiction?: string;
+  lawTheme?: string;
+  confidence?: "high" | "medium" | "low";
+  whyItQualifies?: string;
+};
+
+/** Top expansion or downsizing/restructure headlines for email / UI (from qualified snippets). */
+export type ExpansionDownsizingTopSignalRef = {
+  title: string;
+  sourceUrl: string;
+  sourceName?: string;
+};
+
 export type AIReportContract = {
   executiveSummary: string;
   marketBriefs: {
@@ -294,11 +350,36 @@ export type AIReportContract = {
       title: string;
       sourceName: string;
       sourceUrl: string;
+      /** What happened / factual anchor (may mirror title if no separate fact). */
+      whatHappened?: string;
       whyItMatters: string;
       hrbpImplication: string;
       recommendedAction: string;
     }[];
   }[];
+  employmentLaw: {
+    headline: string;
+    disclaimer: string;
+    items: EmploymentLawReportItem[];
+  };
+  expansionDownsizing: {
+    expansionCount: number;
+    downsizingCount: number;
+    restructuringCount: number;
+    expansionSummary: string;
+    downsizingSummary: string;
+    restructuringSummary?: string;
+    strongestSignal: string;
+    strongestExpansionSignal?: string;
+    strongestDownsizingSignal?: string;
+    /** Up to two qualified expansion headlines with URLs (may be empty). */
+    topExpansionSignals: ExpansionDownsizingTopSignalRef[];
+    /** Up to two qualified downsizing or restructuring headlines (downsizing first, then restructuring). */
+    topDownsizingRestructureSignals: ExpansionDownsizingTopSignalRef[];
+    peopleImplication: string;
+    suggestedHrbpAction: string;
+    sourceUrls: string[];
+  };
   jobOpportunities: HistoricalJobLink[];
   needsManualReview: NeedsManualReviewJob[];
   skillsToPickUp: {
@@ -315,6 +396,7 @@ export type AIReportContract = {
     format: "PPT" | "One-pager" | "Framework" | "Skill File" | "Brief";
     reason: string;
     nextAction: string;
+    linkedSkill?: string;
   }[];
 };
 

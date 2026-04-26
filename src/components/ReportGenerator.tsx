@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+import { designTokens as dt } from "@/lib/designTokens";
+
 type KeySignal = {
   title: string;
   source: string;
@@ -43,11 +45,13 @@ export default function ReportGenerator() {
   }
 
   return (
-    <section className="mt-8 rounded-3xl border border-white/10 bg-white/5 p-6 shadow-xl">
+    <section
+      className={`mt-8 ${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] ${dt.cardBg} p-6 shadow-[0_0_40px_-24px_rgba(37,244,238,0.2)]`}
+    >
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div>
-          <h2 className="text-2xl font-semibold">Latest Intelligence Report</h2>
-          <p className="mt-2 text-sm text-slate-300">
+          <h2 className={`text-2xl font-semibold ${dt.textPrimary}`}>Latest Intelligence Report</h2>
+          <p className={`mt-2 text-sm ${dt.muted}`}>
             Click the button to generate a fresh report preview.
           </p>
         </div>
@@ -55,45 +59,53 @@ export default function ReportGenerator() {
         <button
           onClick={generateReport}
           disabled={loading}
-          className="rounded-full bg-cyan-300 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+          type="button"
+          className={`rounded-full px-5 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${dt.accentButton}`}
         >
           {loading ? "Generating..." : "Generate Latest Report"}
         </button>
       </div>
 
       {report ? (
-        <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950/70 p-6">
-          <p className="text-sm font-medium text-cyan-300">
+        <div
+          className={`mt-6 ${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[color:rgba(11,13,24,0.72)] p-6`}
+        >
+          <p className={`text-sm font-medium ${dt.accentText}`}>
             Generated at {new Date(report.generatedAt).toLocaleString()}
           </p>
 
-          <h3 className="mt-4 text-xl font-semibold">{report.headline}</h3>
+          <h3 className={`mt-4 text-xl font-semibold ${dt.textPrimary}`}>{report.headline}</h3>
 
-          <p className="mt-4 text-sm leading-6 text-slate-300">
+          <p className={`mt-4 text-sm leading-6 ${dt.muted}`}>
             {report.executiveSummary}
           </p>
 
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             {report.keySignals.map((signal) => (
-              <div key={signal.title} className="rounded-xl bg-white/5 p-4">
-                <p className="text-xs uppercase tracking-wide text-slate-400">
+              <div
+                key={signal.title}
+                className={`rounded-xl border border-[color:var(--swift-border-subtle)] bg-[rgba(17,19,34,0.5)] p-4`}
+              >
+                <p className={`text-xs uppercase tracking-wide ${dt.muted}`}>
                   {signal.source}
                 </p>
-                <p className="mt-2 text-sm font-semibold text-slate-100">
+                <p className={`mt-2 text-sm font-semibold ${dt.textPrimary}`}>
                   {signal.title}
                 </p>
-                <p className="mt-2 text-sm text-slate-300">
+                <p className={`mt-2 text-sm ${dt.muted}`}>
                   {signal.implication}
                 </p>
               </div>
             ))}
           </div>
 
-          <div className="mt-6 rounded-xl bg-white/5 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-400">
+          <div
+            className={`mt-6 rounded-xl border border-[color:var(--swift-border-subtle)] bg-[rgba(17,19,34,0.45)] p-4`}
+          >
+            <p className={`text-xs uppercase tracking-wide ${dt.muted}`}>
               HRBP recommendations
             </p>
-            <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-slate-300">
+            <ul className={`mt-3 list-disc space-y-2 pl-5 text-sm ${dt.muted}`}>
               {report.hrbpRecommendations.map((item) => (
                 <li key={item}>{item}</li>
               ))}
@@ -101,11 +113,11 @@ export default function ReportGenerator() {
           </div>
         </div>
       ) : (
-        <div className="mt-6 rounded-2xl border border-white/10 bg-slate-950/70 p-6">
-          <p className="text-sm font-medium text-cyan-300">
-            No report generated yet
-          </p>
-          <p className="mt-3 text-sm text-slate-300">
+        <div
+          className={`mt-6 ${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[color:rgba(11,13,24,0.72)] p-6`}
+        >
+          <p className={`text-sm font-medium ${dt.accentText}`}>No report generated yet</p>
+          <p className={`mt-3 text-sm ${dt.muted}`}>
             Click the button above to call your first SWIFT report API.
           </p>
         </div>

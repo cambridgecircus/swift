@@ -1,8 +1,16 @@
 import { aiReportContractPrompt } from "@/lib/aiReportContractPrompt";
+import {
+  buildExpansionVsDownsizingTrend,
+  extractDownsizingSnippets,
+  extractEmploymentLawSnippets,
+  extractExpansionSnippets,
+  extractRestructuringSnippets,
+} from "@/lib/swiftKeywordIntel";
 import type {
   AIReportContract,
   ApplicationStatus,
   CleanMarketSignal,
+  ExpansionDownsizingTopSignalRef,
   HistoricalJobLink,
   NeedsManualReviewJob,
   SuggestedChannelStatus,
@@ -230,13 +238,232 @@ function isSuggestedNewChannel(v: unknown): v is SuggestedNewChannel {
 function isLearningAssetRecommendation(v: unknown): v is LearningAssetRecRow {
   if (!v || typeof v !== "object") return false;
   const o = v as Record<string, unknown>;
+  const linkedOk = o.linkedSkill === undefined || typeof o.linkedSkill === "string";
   return (
     typeof o.topic === "string" &&
     typeof o.recommendedAsset === "string" &&
     ASSET_FORMATS.includes(o.format as (typeof ASSET_FORMATS)[number]) &&
     typeof o.reason === "string" &&
-    typeof o.nextAction === "string"
+    typeof o.nextAction === "string" &&
+    linkedOk
   );
+}
+
+function snippetToTopSignalRef(s: {
+  title: string;
+  url?: string;
+  sourceName?: string;
+}): ExpansionDownsizingTopSignalRef {
+  return {
+    title: s.title,
+    sourceUrl: s.url && /^https?:\/\//i.test(s.url) ? s.url : "",
+    sourceName: s.sourceName?.trim() || undefined,
+  };
+}
+
+function mergeTopDownsizingRestructure(
+  down: { title: string; url?: string; sourceName?: string }[],
+  restruct: { title: string; url?: string; sourceName?: string }[],
+): ExpansionDownsizingTopSignalRef[] {
+  const merged = [...down, ...restruct];
+  const seen = new Set<string>();
+  const out: ExpansionDownsizingTopSignalRef[] = [];
+  for (const s of merged) {
+    const k = `${s.title}|${(s.url ?? "").toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(snippetToTopSignalRef(s));
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
+function coerceTopSignalRefs(arr: unknown): ExpansionDownsizingTopSignalRef[] {
+  if (!Array.isArray(arr)) return [];
+  const out: ExpansionDownsizingTopSignalRef[] = [];
+  for (const it of arr) {
+    if (!it || typeof it !== "object") continue;
+    const o = it as Record<string, unknown>;
+    if (typeof o.title !== "string") continue;
+    const su = typeof o.sourceUrl === "string" ? o.sourceUrl : "";
+    out.push({
+      title: o.title,
+      sourceUrl: su,
+      sourceName: typeof o.sourceName === "string" && o.sourceName.trim() ? o.sourceName.trim() : undefined,
+    });
+    if (out.length >= 2) break;
+  }
+  return out;
+}
+
+function cleanSignalsToKeywordRows(signals: CleanMarketSignal[]): Record<string, unknown>[] {
+  return signals.map((x) => ({
+    title: x.title,
+    summary: x.summary,
+    why_it_matters: x.whyItMatters,
+    hrbp_implication: x.hrbpImplication,
+    source_url: x.url,
+    category: x.category,
+  }));
+}
+
+export function buildDeterministicContractIntel(signals: CleanMarketSignal[]): {
+  employmentLaw: AIReportContract["employmentLaw"];
+  expansionDownsizing: AIReportContract["expansionDownsizing"];
+} {
+  const rows = cleanSignalsToKeywordRows(signals);
+  const emp = extractEmploymentLawSnippets(rows, 4);
+  const exp = extractExpansionSnippets(rows, 6);
+  const down = extractDownsizingSnippets(rows, 6);
+  const restruct = extractRestructuringSnippets(rows, 6);
+  const employmentLaw: AIReportContract["employmentLaw"] = {
+    headline:
+      emp.length > 0
+        ? "Employment law signals detected (taxonomy-qualified scan)"
+        : "No strong employment law update found in current run",
+    disclaimer:
+      "Not legal advice. SWIFT surfaces HRBP implications from public signals only; validate material changes with qualified counsel.",
+    items: emp.map((s) => ({
+      title: s.title,
+      sourceName: s.sourceName?.trim() || "RSS / SWIFT signal",
+      sourceUrl: s.url ?? "",
+      whatChanged: s.summary.slice(0, 220) || s.title,
+      whyItMatters:
+        "Public-source item matched SWIFT employment-law taxonomy (workforce / workplace / ER themes). Confirm facts before acting.",
+      hrbpImplication:
+        s.hrbpImplication ??
+        "Triage with People/Legal for affected jurisdictions, policies and manager guidance.",
+      suggestedAction:
+        s.suggestedAction ??
+        "Route to policy/ER review if the signal touches your operating locations or employee segments; otherwise monitor.",
+      jurisdiction: s.jurisdiction,
+      lawTheme: s.lawTheme,
+      confidence: s.confidence,
+      whyItQualifies: s.whyItQualifies,
+    })),
+  };
+
+  const sourceUrls = [...exp, ...down, ...restruct]
+    .map((s) => s.url)
+    .filter((u): u is string => typeof u === "string" && /^https?:\/\//i.test(u));
+
+  const trend = buildExpansionVsDownsizingTrend(exp.length, down.length, restruct.length);
+
+  const strongestEx = exp[0]?.title ?? "";
+  const strongestDn = down[0]?.title ?? restruct[0]?.title ?? "";
+
+  const expansionDownsizing: AIReportContract["expansionDownsizing"] = {
+    expansionCount: exp.length,
+    downsizingCount: down.length,
+    restructuringCount: restruct.length,
+    expansionSummary: exp.length
+      ? `${trend} Highlights: ${exp.map((e) => e.title).join(" · ").slice(0, 400)}`
+      : `${trend} No qualified expansion cluster in this RSS window.`,
+    downsizingSummary: down.length
+      ? down
+          .map((e) => e.title)
+          .join(" · ")
+          .slice(0, 480)
+      : "No qualified downsizing / headcount cluster in this RSS window.",
+    restructuringSummary: restruct.length
+      ? restruct
+          .map((e) => e.title)
+          .join(" · ")
+          .slice(0, 420)
+      : "No restructuring / transformation cluster in this RSS window.",
+    strongestSignal: strongestEx || strongestDn || trend,
+    strongestExpansionSignal: strongestEx,
+    strongestDownsizingSignal: down[0]?.title ?? restruct[0]?.title ?? "",
+    topExpansionSignals: exp.slice(0, 2).map(snippetToTopSignalRef),
+    topDownsizingRestructureSignals: mergeTopDownsizingRestructure(down, restruct),
+    peopleImplication:
+      exp.length > down.length + restruct.length
+        ? "Qualified expansion signals point to hiring demand, footprint and operating-model pressure on HRBPs."
+        : down.length + restruct.length > exp.length
+          ? "Downsizing and restructuring signals elevate workforce planning, ER risk and change leadership."
+          : "Mixed expansion and contraction signals — calibrate workforce plans and leadership narratives.",
+    suggestedHrbpAction:
+      "Prioritise 1–2 exec-ready questions on hiring, location strategy, restructuring governance and manager enablement; cite listed sources.",
+    sourceUrls,
+  };
+
+  return { employmentLaw, expansionDownsizing };
+}
+
+function mergeSignalDerivedContractModules(
+  o: Record<string, unknown>,
+  signals: CleanMarketSignal[],
+): ReturnType<typeof buildDeterministicContractIntel> {
+  const d = buildDeterministicContractIntel(signals);
+  const el = o.employmentLaw;
+  if (!el || typeof el !== "object" || !Array.isArray((el as Record<string, unknown>).items)) {
+    o.employmentLaw = d.employmentLaw;
+  } else {
+    const items = (el as Record<string, unknown>).items as unknown[];
+    if (items.length === 0) {
+      o.employmentLaw = d.employmentLaw;
+    }
+  }
+  const ex = o.expansionDownsizing;
+  if (!ex || typeof ex !== "object") {
+    o.expansionDownsizing = d.expansionDownsizing;
+  }
+  return d;
+}
+
+function mergeJobOpportunityDefaults(o: Record<string, unknown>, jobs: HistoricalJobLink[]): void {
+  if (!Array.isArray(o.jobOpportunities) || jobs.length === 0) return;
+  if (o.jobOpportunities.length > 0) return;
+  o.jobOpportunities = jobs.slice(0, 5);
+}
+
+/** Patch common partial shapes before strict validation. */
+function patchContractRoot(o: Record<string, unknown>, signals: CleanMarketSignal[]): void {
+  const det = mergeSignalDerivedContractModules(o, signals);
+  const ex = o.expansionDownsizing;
+  if (ex && typeof ex === "object") {
+    const r = ex as Record<string, unknown>;
+    if (typeof r.expansionCount !== "number") r.expansionCount = 0;
+    if (typeof r.downsizingCount !== "number") r.downsizingCount = 0;
+    if (typeof r.restructuringCount !== "number") r.restructuringCount = 0;
+    for (const f of [
+      "expansionSummary",
+      "downsizingSummary",
+      "restructuringSummary",
+      "strongestSignal",
+      "strongestExpansionSignal",
+      "strongestDownsizingSignal",
+      "peopleImplication",
+      "suggestedHrbpAction",
+    ] as const) {
+      if (typeof r[f] !== "string") r[f] = "";
+    }
+    if (!r.strongestExpansionSignal && typeof r.strongestSignal === "string") {
+      r.strongestExpansionSignal = r.strongestSignal;
+    }
+    if (!Array.isArray(r.sourceUrls)) r.sourceUrls = [];
+    let topExp = coerceTopSignalRefs(r.topExpansionSignals);
+    let topDnRest = coerceTopSignalRefs(r.topDownsizingRestructureSignals);
+    const detEx = det.expansionDownsizing;
+    if (topExp.length === 0 && detEx.topExpansionSignals.length > 0) {
+      topExp = detEx.topExpansionSignals;
+    }
+    if (topDnRest.length === 0 && detEx.topDownsizingRestructureSignals.length > 0) {
+      topDnRest = detEx.topDownsizingRestructureSignals;
+    }
+    r.topExpansionSignals = topExp;
+    r.topDownsizingRestructureSignals = topDnRest;
+  }
+  const el = o.employmentLaw;
+  if (el && typeof el === "object") {
+    const r = el as Record<string, unknown>;
+    if (typeof r.headline !== "string") r.headline = "";
+    if (typeof r.disclaimer !== "string") {
+      r.disclaimer =
+        "Not legal advice. SWIFT surfaces HRBP implications from public signals only; validate material changes with qualified counsel.";
+    }
+    if (!Array.isArray(r.items)) r.items = [];
+  }
 }
 
 function keySignalIssues(ks: unknown, path: string): string[] {
@@ -253,6 +480,91 @@ function keySignalIssues(ks: unknown, path: string): string[] {
   ] as const;
   for (const f of fields) {
     if (typeof k[f] !== "string") miss.push(`${path}.${f}: must be a string`);
+  }
+  if (k.whatHappened !== undefined && typeof k.whatHappened !== "string") {
+    miss.push(`${path}.whatHappened: must be a string when present`);
+  }
+  return miss;
+}
+
+function employmentLawItemIssues(it: unknown, path: string): string[] {
+  const miss: string[] = [];
+  if (!it || typeof it !== "object") return [`${path}: must be an object`];
+  const x = it as Record<string, unknown>;
+  for (const f of [
+    "title",
+    "sourceName",
+    "sourceUrl",
+    "whatChanged",
+    "whyItMatters",
+    "hrbpImplication",
+    "suggestedAction",
+  ] as const) {
+    if (typeof x[f] !== "string") miss.push(`${path}.${f}: must be a string`);
+  }
+  for (const opt of ["jurisdiction", "lawTheme", "whyItQualifies"] as const) {
+    if (x[opt] !== undefined && typeof x[opt] !== "string") {
+      miss.push(`${path}.${opt}: must be a string when present`);
+    }
+  }
+  if (x.confidence !== undefined) {
+    const c = x.confidence;
+    if (c !== "high" && c !== "medium" && c !== "low") {
+      miss.push(`${path}.confidence: must be high|medium|low when present`);
+    }
+  }
+  return miss;
+}
+
+function expansionDownsizingIssues(v: unknown): string[] {
+  const miss: string[] = [];
+  if (!v || typeof v !== "object") return ["expansionDownsizing: must be an object"];
+  const o = v as Record<string, unknown>;
+  if (typeof o.expansionCount !== "number") miss.push("expansionDownsizing.expansionCount: must be a number");
+  if (typeof o.downsizingCount !== "number") miss.push("expansionDownsizing.downsizingCount: must be a number");
+  if (typeof o.restructuringCount !== "number") miss.push("expansionDownsizing.restructuringCount: must be a number");
+  for (const f of [
+    "expansionSummary",
+    "downsizingSummary",
+    "restructuringSummary",
+    "strongestSignal",
+    "strongestExpansionSignal",
+    "strongestDownsizingSignal",
+    "peopleImplication",
+    "suggestedHrbpAction",
+  ] as const) {
+    if (typeof o[f] !== "string") miss.push(`expansionDownsizing.${f}: must be a string`);
+  }
+  if (!Array.isArray(o.sourceUrls)) miss.push("expansionDownsizing.sourceUrls: must be an array");
+  else if (!o.sourceUrls.every((u) => typeof u === "string")) {
+    miss.push("expansionDownsizing.sourceUrls: must be string[]");
+  }
+  for (const [key, maxLen] of [
+    ["topExpansionSignals", 2],
+    ["topDownsizingRestructureSignals", 2],
+  ] as const) {
+    const arr = o[key];
+    if (!Array.isArray(arr)) {
+      miss.push(`expansionDownsizing.${key}: must be an array`);
+      continue;
+    }
+    if (arr.length > maxLen) {
+      miss.push(`expansionDownsizing.${key}: must have at most ${maxLen} items`);
+    }
+    arr.forEach((it, i) => {
+      if (!it || typeof it !== "object") {
+        miss.push(`expansionDownsizing.${key}[${i}]: must be an object`);
+        return;
+      }
+      const x = it as Record<string, unknown>;
+      if (typeof x.title !== "string") miss.push(`expansionDownsizing.${key}[${i}].title: must be a string`);
+      if (typeof x.sourceUrl !== "string") {
+        miss.push(`expansionDownsizing.${key}[${i}].sourceUrl: must be a string`);
+      }
+      if (x.sourceName !== undefined && typeof x.sourceName !== "string") {
+        miss.push(`expansionDownsizing.${key}[${i}].sourceName: must be a string when present`);
+      }
+    });
   }
   return miss;
 }
@@ -360,6 +672,22 @@ export function getAIReportContractValidationIssues(v: unknown): string[] {
     });
   }
 
+  const el = o.employmentLaw;
+  if (!el || typeof el !== "object") {
+    miss.push("employmentLaw: must be an object");
+  } else {
+    const r = el as Record<string, unknown>;
+    if (typeof r.headline !== "string") miss.push("employmentLaw.headline: must be a string");
+    if (typeof r.disclaimer !== "string") miss.push("employmentLaw.disclaimer: must be a string");
+    if (!Array.isArray(r.items)) miss.push("employmentLaw.items: must be an array");
+    else
+      r.items.forEach((it, i) => {
+        miss.push(...employmentLawItemIssues(it, `employmentLaw.items[${i}]`));
+      });
+  }
+
+  miss.push(...expansionDownsizingIssues(o.expansionDownsizing));
+
   return miss;
 }
 
@@ -452,6 +780,8 @@ function emptyDiagnostics(): DeepSeekInvokeDiagnostics {
 export async function generateDeepSeekReportResult(input: {
   cleanedSignals: CleanMarketSignal[];
   generatedAt: string;
+  jobOpportunityDefaults?: HistoricalJobLink[];
+  weeklyPattern?: string;
 }): Promise<DeepSeekReportResult> {
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
   const baseDiag = emptyDiagnostics();
@@ -471,6 +801,8 @@ export async function generateDeepSeekReportResult(input: {
   const userPayload = {
     generatedAt: input.generatedAt,
     cleanedSignals: input.cleanedSignals,
+    jobOpportunityDefaults: input.jobOpportunityDefaults ?? [],
+    weeklyPattern: input.weeklyPattern ?? "",
   };
 
   const userContent = `${aiReportContractPrompt}
@@ -550,11 +882,15 @@ ${JSON.stringify(userPayload)}`;
       continue;
     }
 
-    const issues = getAIReportContractValidationIssues(parsed.value);
-    if (issues.length === 0 && isAIReportContract(parsed.value)) {
+    const root = parsed.value as Record<string, unknown>;
+    patchContractRoot(root, input.cleanedSignals);
+    mergeJobOpportunityDefaults(root, input.jobOpportunityDefaults ?? []);
+
+    const issues = getAIReportContractValidationIssues(root);
+    if (issues.length === 0 && isAIReportContract(root)) {
       return {
         ok: true,
-        contract: parsed.value,
+        contract: root as unknown as AIReportContract,
         diagnostics: {
           apiStatus: attempt.httpStatus,
           rawResponsePreview: "",
@@ -592,6 +928,8 @@ ${JSON.stringify(userPayload)}`;
 export async function generateDeepSeekReport(input: {
   cleanedSignals: CleanMarketSignal[];
   generatedAt: string;
+  jobOpportunityDefaults?: HistoricalJobLink[];
+  weeklyPattern?: string;
 }): Promise<AIReportContract | null> {
   const result = await generateDeepSeekReportResult(input);
   return result.ok ? result.contract : null;
