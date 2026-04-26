@@ -1,69 +1,26 @@
-export type Opportunity = {
-  role: string;
-  company: string;
-  location: string;
-  source: string;
-  fitScore: number;
-  whyThisFits: string;
-  gaps: string[];
-  recommendedAction: string;
-};
+import type {
+  JobOpportunity,
+  LearningAsset,
+  LearningAssetHistory,
+  SkillToPickUp,
+} from "@/lib/types";
 
-export type SkillPriority = "High" | "Medium" | "Low";
+export type { LearningAsset } from "@/lib/types";
 
-export type SkillItem = {
-  skill: string;
-  category: string;
-  priority: SkillPriority;
-  evidence: string;
-  currentLevel: "Awareness" | "Working" | "Confident";
-  targetLevel: "Working" | "Confident" | "Expert";
-  nextAction: string;
-  relatedAsset: string;
-};
+const nowIso = () => new Date().toISOString();
 
-export type LearningAssetPriority = "High" | "Medium" | "Low";
-export type LearningAssetStatus =
-  | "Planned"
-  | "Researching"
-  | "Drafting"
-  | "Generated"
-  | "Ready to Present";
-export type LearningAssetTrend = "Increasing" | "Stable" | "Emerging";
-
-export type LearningAsset = {
-  topic:
-    | "People Strategy & Operating Model"
-    | "Talent Acquisition"
-    | "Talent Management"
-    | "Performance Management"
-    | "Compensation & Reward"
-    | "HR Metrics & People Analytics"
-    | "Organisation Design & Workforce Planning"
-    | "Change Management"
-    | "Leadership & Manager Effectiveness"
-    | "Employee Experience & Culture"
-    | "Employee Relations & Risk"
-    | "Learning, Capability & Skills"
-    | "DEI, Inclusion & Belonging"
-    | "HR Tech, AI & Automation"
-    | "Web3 / AI Domain Knowledge for HRBP";
-  purpose: string;
-  priority: LearningAssetPriority;
-  status: LearningAssetStatus;
-  marketDemandScore: number;
-  trend: LearningAssetTrend;
-  plannedAsset: string;
-  nextAction: string;
-};
-
-export const mockOpportunities: Opportunity[] = [
+export const mockOpportunities: JobOpportunity[] = [
   {
+    id: "opp_axiom_labs_hrbp_ai",
     role: "HRBP, Product & Engineering (AI)",
     company: "Axiom Labs",
     location: "London (Hybrid)",
     source: "LinkedIn",
+    url: "https://example.com/jobs/axiom-labs-hrbp-ai",
+    dateFound: nowIso(),
     fitScore: 86,
+    seniorityFit: "High",
+    sectorFit: "High",
     whyThisFits:
       "High-leverage HRBP seat where operating model + capability mapping are core deliverables.",
     gaps: ["Deep hands-on people analytics instrumentation", "EU works council exposure"],
@@ -71,11 +28,16 @@ export const mockOpportunities: Opportunity[] = [
       "Prepare a 30/60/90 with AI operating model changes + manager enablement plan.",
   },
   {
+    id: "opp_ledgerline_people_partner_gtm",
     role: "People Partner, GTM & RevOps",
     company: "Ledgerline",
     location: "Remote (EU)",
     source: "Company site",
+    url: "https://example.com/jobs/ledgerline-people-partner-gtm",
+    dateFound: nowIso(),
     fitScore: 81,
+    seniorityFit: "Medium",
+    sectorFit: "Medium",
     whyThisFits:
       "Strong match for commercial org design, performance cadence, and comp/IC hygiene.",
     gaps: ["Crypto market cycles narrative", "Comp banding at scale"],
@@ -83,11 +45,16 @@ export const mockOpportunities: Opportunity[] = [
       "Draft a comp + performance cadence proposal for lean GTM teams.",
   },
   {
+    id: "opp_northbridge_web3_hrbp_risk",
     role: "Senior HRBP, Compliance & Risk",
     company: "Northbridge Web3",
     location: "Dublin (Onsite)",
     source: "Recruiter",
+    url: "https://example.com/jobs/northbridge-web3-hrbp-risk",
+    dateFound: nowIso(),
     fitScore: 77,
+    seniorityFit: "High",
+    sectorFit: "High",
     whyThisFits:
       "Regulatory-facing operating rhythm; ideal for compliance-ready growth and ER risk posture.",
     gaps: ["Onsite preference", "Specialist ER playbooks"],
@@ -96,10 +63,11 @@ export const mockOpportunities: Opportunity[] = [
   },
 ];
 
-export const mockSkills: SkillItem[] = [
+export const mockSkills: SkillToPickUp[] = [
   {
+    id: "skill_ai_operating_model_design",
     skill: "AI Operating Model Design",
-    category: "People Strategy",
+    category: "AI / Automation",
     priority: "High",
     evidence:
       "More roles require HRBP input on work decomposition: automate vs augment vs human-led.",
@@ -110,25 +78,27 @@ export const mockSkills: SkillItem[] = [
     relatedAsset: "People Strategy & Operating Model",
   },
   {
+    id: "skill_hr_analytics_exec_decisions",
     skill: "HR Analytics for Executive Decisions",
-    category: "People Analytics",
+    category: "Data / Analytics",
     priority: "High",
     evidence:
       "Signals show lean teams want precision: capacity, productivity, attrition risk, and role criticality.",
-    currentLevel: "Awareness",
-    targetLevel: "Confident",
+    currentLevel: "Beginner",
+    targetLevel: "Strong",
     nextAction:
       "Define 8–10 HRBP-ready metrics and how they translate to leadership actions each week.",
     relatedAsset: "HR Metrics & People Analytics",
   },
   {
+    id: "skill_comp_narrative_web3_ai",
     skill: "Compensation Narrative for Web3/AI",
-    category: "Reward",
+    category: "Web3 / Crypto",
     priority: "Medium",
     evidence:
       "Market volatility pushes more scrutiny on cash/eq mix, leveling, and role-based value.",
     currentLevel: "Working",
-    targetLevel: "Confident",
+    targetLevel: "Strong",
     nextAction:
       "Draft a comp philosophy one-pager with scenarios for hiring freezes and critical roles.",
     relatedAsset: "Compensation & Reward",
@@ -137,6 +107,7 @@ export const mockSkills: SkillItem[] = [
 
 export const mockLearningAssets: LearningAsset[] = [
   {
+    id: "asset_people_strategy_operating_model",
     topic: "People Strategy & Operating Model",
     purpose: "Turn market signals into practical org design and decision rhythms.",
     priority: "High",
@@ -145,8 +116,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Increasing",
     plannedAsset: "Executive playbook: AI-native HRBP operating model",
     nextAction: "Draft 3 operating model archetypes for lean AI teams.",
+    lastChangedAt: nowIso(),
+    changeReason: "Upgraded to Drafting after initial outline review.",
   },
   {
+    id: "asset_talent_acquisition",
     topic: "Talent Acquisition",
     purpose: "Translate capability bets into sharper role definitions and hiring plans.",
     priority: "Medium",
@@ -155,8 +129,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Stable",
     plannedAsset: "Role scorecards + capability interview kit",
     nextAction: "Collect 10 role profiles across AI/Web3 operators and map common patterns.",
+    lastChangedAt: nowIso(),
+    changeReason: "Added sources and started research notes.",
   },
   {
+    id: "asset_talent_management",
     topic: "Talent Management",
     purpose: "Build retention and progression signals for small, senior-heavy teams.",
     priority: "Medium",
@@ -165,8 +142,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Stable",
     plannedAsset: "Lean-team talent review blueprint",
     nextAction: "Define a 45-minute quarterly talent review agenda with action outputs.",
+    lastChangedAt: nowIso(),
+    changeReason: "Queued for next month’s drafting sprint.",
   },
   {
+    id: "asset_performance_management",
     topic: "Performance Management",
     purpose: "Create execution cadence and decision clarity under uncertainty.",
     priority: "High",
@@ -175,8 +155,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Increasing",
     plannedAsset: "Performance cadence template for operator-led teams",
     nextAction: "Draft a 4-week cycle: goals → signals → decisions → coaching actions.",
+    lastChangedAt: nowIso(),
+    changeReason: "Prioritised based on rising leadership demand for cadence clarity.",
   },
   {
+    id: "asset_compensation_reward",
     topic: "Compensation & Reward",
     purpose: "Support compensation decisions aligned to critical capabilities.",
     priority: "High",
@@ -185,8 +168,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Increasing",
     plannedAsset: "Comp philosophy + leveling narrative for Web3/AI",
     nextAction: "Create 3 scenarios for cash/eq trade-offs by role criticality.",
+    lastChangedAt: nowIso(),
+    changeReason: "Priority increased due to market volatility and hiring scrutiny.",
   },
   {
+    id: "asset_hr_metrics_people_analytics",
     topic: "HR Metrics & People Analytics",
     purpose: "Provide weekly executive-ready people insights and actions.",
     priority: "High",
@@ -195,8 +181,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Increasing",
     plannedAsset: "Weekly HRBP metrics pack: signals-to-actions",
     nextAction: "Define the leading indicators for productivity and attrition risk.",
+    lastChangedAt: nowIso(),
+    changeReason: "Drafting started to support weekly exec decision-making.",
   },
   {
+    id: "asset_org_design_workforce_planning",
     topic: "Organisation Design & Workforce Planning",
     purpose: "Ensure workforce shape matches strategy while staying lean.",
     priority: "Medium",
@@ -205,8 +194,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Stable",
     plannedAsset: "Workforce planning sprint kit",
     nextAction: "Draft a 2-week planning sprint with inputs/outputs and stakeholder roles.",
+    lastChangedAt: nowIso(),
+    changeReason: "Held in backlog until core metrics pack is established.",
   },
   {
+    id: "asset_change_management",
     topic: "Change Management",
     purpose: "Help leaders execute operating model shifts without cultural debt.",
     priority: "Medium",
@@ -215,8 +207,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Emerging",
     plannedAsset: "Change narrative + manager enablement package",
     nextAction: "Write a change storyline template for AI adoption waves.",
+    lastChangedAt: nowIso(),
+    changeReason: "Moved from Planned to Drafting for AI adoption communications.",
   },
   {
+    id: "asset_leadership_manager_effectiveness",
     topic: "Leadership & Manager Effectiveness",
     purpose: "Increase decision quality and coaching clarity in high-velocity teams.",
     priority: "High",
@@ -225,8 +220,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Increasing",
     plannedAsset: "Manager operating system: rituals, feedback, and prioritization",
     nextAction: "Draft a 6-ritual manager system for lean teams.",
+    lastChangedAt: nowIso(),
+    changeReason: "Scheduled once performance cadence framework is drafted.",
   },
   {
+    id: "asset_employee_experience_culture",
     topic: "Employee Experience & Culture",
     purpose: "Sustain engagement while teams scale selectively.",
     priority: "Low",
@@ -235,8 +233,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Stable",
     plannedAsset: "Experience principles for hybrid operator teams",
     nextAction: "Define 5 culture principles tied to execution and risk posture.",
+    lastChangedAt: nowIso(),
+    changeReason: "Lower urgency versus operating model and performance cadence work.",
   },
   {
+    id: "asset_employee_relations_risk",
     topic: "Employee Relations & Risk",
     purpose: "Reduce risk exposure as compliance scrutiny increases.",
     priority: "Medium",
@@ -245,8 +246,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Emerging",
     plannedAsset: "ER risk checklist for fast-moving orgs",
     nextAction: "Draft a lightweight ER risk triage framework for HRBPs.",
+    lastChangedAt: nowIso(),
+    changeReason: "Researching due to increased compliance scrutiny signals.",
   },
   {
+    id: "asset_learning_capability_skills",
     topic: "Learning, Capability & Skills",
     purpose: "Turn capability gaps into targeted learning plans.",
     priority: "Medium",
@@ -255,8 +259,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Stable",
     plannedAsset: "Capability roadmap: HRBP skill layer",
     nextAction: "Map skills to outputs and evidence of mastery.",
+    lastChangedAt: nowIso(),
+    changeReason: "Planned as a supporting asset for the skills layer.",
   },
   {
+    id: "asset_dei_inclusion_belonging",
     topic: "DEI, Inclusion & Belonging",
     purpose: "Maintain inclusive decision-making while hiring becomes more selective.",
     priority: "Low",
@@ -265,8 +272,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Stable",
     plannedAsset: "Inclusive hiring + progression safeguards",
     nextAction: "Draft 5 safeguards that fit lean teams without heavy process.",
+    lastChangedAt: nowIso(),
+    changeReason: "Planned; will be drafted once core hiring scorecards exist.",
   },
   {
+    id: "asset_hr_tech_ai_automation",
     topic: "HR Tech, AI & Automation",
     purpose: "Leverage automation to increase HRBP speed and clarity.",
     priority: "High",
@@ -275,8 +285,11 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Increasing",
     plannedAsset: "AI workflow stack: HRBP intelligence loop",
     nextAction: "Package as a 10-slide exec deck with operating metrics.",
+    lastChangedAt: nowIso(),
+    changeReason: "Moved from Drafting to Generated after synthesis run.",
   },
   {
+    id: "asset_web3_ai_domain_knowledge_hrbp",
     topic: "Web3 / AI Domain Knowledge for HRBP",
     purpose: "Build domain fluency to interpret market signals and hiring shifts.",
     priority: "High",
@@ -285,6 +298,59 @@ export const mockLearningAssets: LearningAsset[] = [
     trend: "Emerging",
     plannedAsset: "Domain primer: Web3 x AI for HRBP decisions",
     nextAction: "Generate a glossary + 30-question calibration quiz for leaders.",
+    lastChangedAt: nowIso(),
+    changeReason: "Moved from Researching to Generated to support exec conversations.",
+  },
+];
+
+export const mockLearningAssetHistory: LearningAssetHistory[] = [
+  {
+    id: "hist_hr_tech_ai_automation_status",
+    assetId: "asset_hr_tech_ai_automation",
+    topic: "HR Tech, AI & Automation",
+    date: nowIso(),
+    previousStatus: "Drafting",
+    newStatus: "Generated",
+    marketDemandScore: 92,
+    evidenceCount: 14,
+    reason: "Initial synthesis completed; ready for packaging.",
+    sourceSummary: "Signals across HR tech vendors and operator teams show accelerating adoption.",
+  },
+  {
+    id: "hist_comp_reward_priority",
+    assetId: "asset_compensation_reward",
+    topic: "Compensation & Reward",
+    date: nowIso(),
+    previousPriority: "Medium",
+    newPriority: "High",
+    marketDemandScore: 86,
+    evidenceCount: 9,
+    reason: "Hiring scrutiny increased; comp narratives now central to decision-making.",
+    sourceSummary: "More job specs and leadership posts emphasize leveling, equity mix, and cost control.",
+  },
+  {
+    id: "hist_web3_ai_domain_status",
+    assetId: "asset_web3_ai_domain_knowledge_hrbp",
+    topic: "Web3 / AI Domain Knowledge for HRBP",
+    date: nowIso(),
+    previousStatus: "Researching",
+    newStatus: "Generated",
+    marketDemandScore: 89,
+    evidenceCount: 11,
+    reason: "Generated to support HRBP credibility in exec conversations.",
+    sourceSummary: "Recurring need for HRBP domain fluency surfaced in role expectations and interviews.",
+  },
+  {
+    id: "hist_change_mgmt_status",
+    assetId: "asset_change_management",
+    topic: "Change Management",
+    date: nowIso(),
+    previousStatus: "Planned",
+    newStatus: "Drafting",
+    marketDemandScore: 76,
+    evidenceCount: 7,
+    reason: "AI adoption waves require stronger change narrative patterns.",
+    sourceSummary: "Teams report friction in adoption; managers need practical enablement assets.",
   },
 ];
 
