@@ -77,6 +77,7 @@ export type JobOpportunity = {
   location: string;
   source: string;
   url?: string;
+  applyUrl?: string;
   dateFound: string;
   fitScore: number;
   seniorityFit: "Low" | "Medium" | "High";
@@ -208,5 +209,112 @@ export type SourceHealthResult = {
   itemCount: number;
   errorMessage?: string;
   checkedAt: string;
+};
+
+export type ApplicationStatus =
+  | "To Review"
+  | "Interested"
+  | "Applied"
+  | "Rejected"
+  | "Archived";
+
+export type SuggestedChannelStatus =
+  | "Suggested"
+  | "Approved"
+  | "Ignored"
+  | "Added Later";
+
+export type JobApplicationChannel = {
+  id: string;
+  name: string;
+  channelType:
+    | "job_board"
+    | "company_careers"
+    | "linkedin_saved_search"
+    | "newsletter"
+    | "community"
+    | "manual";
+  url: string;
+  topic: "web3" | "ai" | "hr" | "jobs";
+  enabled: boolean;
+  qualityTier: QualityTier;
+  usedBy: ("job_opportunities" | "skills_to_pick_up" | "settings")[];
+  lastCheckedAt?: string;
+  notes: string;
+};
+
+export type HistoricalJobLink = {
+  id: string;
+  role: string;
+  company: string;
+  location: string;
+  source: string;
+  applyUrl: string;
+  dateFound: string;
+  fitScore: number;
+  applicationStatus: ApplicationStatus;
+  whyThisFits: string;
+  gaps: string[];
+  recommendedAction: string;
+  notes?: string;
+};
+
+export type SuggestedNewChannel = {
+  id: string;
+  channelName: string;
+  channelType:
+    | "job_board"
+    | "company_careers"
+    | "linkedin_saved_search"
+    | "newsletter"
+    | "community"
+    | "manual";
+  url: string;
+  reasonToAdd: string;
+  expectedSignal: string;
+  priority: "High" | "Medium" | "Low";
+  status: SuggestedChannelStatus;
+};
+
+export type NeedsManualReviewJob = {
+  id: string;
+  roleHint: string;
+  companyHint?: string;
+  sourceName: string;
+  sourceUrl?: string;
+  reason: string;
+};
+
+export type AIReportContract = {
+  executiveSummary: string;
+  marketBriefs: {
+    category: "web3_ai" | "hrbp";
+    headline: string;
+    keySignals: {
+      title: string;
+      sourceName: string;
+      sourceUrl: string;
+      whyItMatters: string;
+      hrbpImplication: string;
+      recommendedAction: string;
+    }[];
+  }[];
+  jobOpportunities: HistoricalJobLink[];
+  needsManualReview: NeedsManualReviewJob[];
+  skillsToPickUp: {
+    skill: string;
+    priority: "High" | "Medium" | "Low";
+    evidence: string;
+    nextAction: string;
+    relatedLearningAsset: string;
+  }[];
+  suggestedNewChannels: SuggestedNewChannel[];
+  learningAssetRecommendations: {
+    topic: string;
+    recommendedAsset: string;
+    format: "PPT" | "One-pager" | "Framework" | "Skill File" | "Brief";
+    reason: string;
+    nextAction: string;
+  }[];
 };
 

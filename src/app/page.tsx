@@ -14,6 +14,13 @@ import {
   mockSettings,
   mockSkills,
 } from "@/lib/mockData";
+import {
+  historicalJobLinks,
+  jobApplicationChannels,
+  suggestedNewChannels,
+} from "@/lib/jobSourceMemory";
+import { designTokens as dt } from "@/lib/designTokens";
+import { isRealJobApplyUrl } from "@/lib/jobApplyUrl";
 import { sourceRegistry } from "@/lib/sourceRegistry";
 
 type DashboardBrief = {
@@ -42,12 +49,17 @@ const hrbpBrief: DashboardBrief = {
   ],
 };
 
+const tierPillLayout =
+  "inline-flex min-w-[64px] items-center justify-center whitespace-nowrap";
+
 function Pill({
   children,
   tone = "neutral",
+  className = "",
 }: {
   children: ReactNode;
   tone?: "neutral" | "success" | "warning";
+  className?: string;
 }) {
   const styles =
     tone === "success"
@@ -60,7 +72,10 @@ function Pill({
       className={[
         "rounded-full border px-2.5 py-1 text-[11px] font-semibold",
         styles,
-      ].join(" ")}
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
     >
       {children}
     </span>
@@ -81,7 +96,7 @@ function PrimaryButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="rounded-xl bg-cyan-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+      className={dt.accentButton}
     >
       {children}
     </button>
@@ -106,9 +121,23 @@ export default function Home() {
   );
 
   const [active, setActive] = useState<NavKey>("dashboard");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [lastHeadline, setLastHeadline] = useState<string | null>(null);
+
+  const activeSectionLabel = useMemo(() => {
+    const item = navItems.find((n) => n.key === active);
+    return item?.label ?? "SWIFT";
+  }, [active, navItems]);
+
+  const registryTableRows = useMemo(
+    () =>
+      [...sourceRegistry].sort(
+        (a, b) => a.topic.localeCompare(b.topic) || a.name.localeCompare(b.name),
+      ),
+    [],
+  );
 
   const sourceRegistrySummary = useMemo(() => {
     const total = sourceRegistry.length;
@@ -150,19 +179,61 @@ export default function Home() {
     }
   }
 
-  return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col md:flex-row">
-        <Sidebar active={active} onSelect={setActive} items={navItems} />
+  const insetCard = `${dt.cardRadius} ${dt.border} ${dt.cardInset} p-4 sm:p-5`;
 
-        <div className="flex-1 px-5 py-8 md:px-10 md:py-10">
+  return (
+    <main className={dt.pageBg}>
+      <header className={dt.mobileHeader}>
+        <button
+          type="button"
+          onClick={() => setMobileMenuOpen(true)}
+          className={`inline-flex items-center gap-2 rounded-lg ${dt.border} px-3 py-2 text-sm font-semibold text-slate-100 transition hover:bg-white/5`}
+        >
+          <svg
+            className="h-5 w-5 shrink-0 text-cyan-200"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            aria-hidden
+          >
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+          Menu
+        </button>
+        <div className="min-w-0 flex-1 text-center">
+          <p className="text-[10px] font-semibold tracking-[0.22em] text-slate-500">
+            SWIFT
+          </p>
+          <p className="truncate text-sm font-semibold text-slate-100">
+            {activeSectionLabel}
+          </p>
+        </div>
+        <span className="inline-block w-[4.5rem]" aria-hidden />
+      </header>
+
+      <div
+        className={`mx-auto flex min-h-0 w-full min-w-0 flex-1 flex-col md:min-h-screen md:flex-row ${dt.maxContent}`}
+      >
+        <Sidebar
+          active={active}
+          onSelect={setActive}
+          items={navItems}
+          mobileOpen={mobileMenuOpen}
+          onMobileClose={() => setMobileMenuOpen(false)}
+        />
+
+        <div
+          className={`min-w-0 flex-1 overflow-x-hidden ${dt.mainPadX} ${dt.mainPadY}`}
+        >
           {active === "dashboard" ? (
-            <div className="space-y-6">
+            <div className="space-y-8 md:space-y-10">
               <SectionHeader
                 title="Dashboard"
                 subtitle="A premium, executive dashboard mock that keeps SWIFT deployable on Vercel while your protected cron-driven email loop stays on the server."
                 right={
-                  <div className="flex flex-col items-start gap-2 md:items-end">
+                  <div className="flex w-full max-w-md flex-col gap-3 md:w-auto md:max-w-none md:items-end">
                     <PrimaryButton
                       onClick={refreshIntelligencePreview}
                       disabled={refreshing}
@@ -171,7 +242,7 @@ export default function Home() {
                         ? "Refreshing..."
                         : "Refresh Intelligence & Send Report"}
                     </PrimaryButton>
-                    <p className="text-xs text-slate-400">
+                    <p className={`text-xs leading-relaxed ${dt.muted}`}>
                       For now this calls{" "}
                       <span className="font-semibold text-slate-200">
                         /api/generate-report
@@ -187,7 +258,7 @@ export default function Home() {
                 }
               />
 
-              <div className="grid gap-5 lg:grid-cols-2">
+              <div className="grid gap-6 lg:grid-cols-2">
                 <InfoCard
                   title={web3AiBrief.title}
                   subtitle="Signals curated for the Web3 x AI operating environment."
@@ -196,7 +267,7 @@ export default function Home() {
                   <p className="text-sm font-semibold text-slate-100">
                     {web3AiBrief.headline}
                   </p>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-slate-300">
+                  <ul className="mt-4 list-disc space-y-2.5 pl-5 text-sm leading-relaxed text-slate-300">
                     {web3AiBrief.signals.map((s) => (
                       <li key={s}>{s}</li>
                     ))}
@@ -211,7 +282,7 @@ export default function Home() {
                   <p className="text-sm font-semibold text-slate-100">
                     {hrbpBrief.headline}
                   </p>
-                  <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-slate-300">
+                  <ul className="mt-4 list-disc space-y-2.5 pl-5 text-sm leading-relaxed text-slate-300">
                     {hrbpBrief.signals.map((s) => (
                       <li key={s}>{s}</li>
                     ))}
@@ -219,7 +290,7 @@ export default function Home() {
                 </InfoCard>
               </div>
 
-              <div className="grid gap-5 lg:grid-cols-3">
+              <div className="grid gap-6 lg:grid-cols-3">
                 <InfoCard
                   title="Strong Signals"
                   subtitle="High-conviction items with HRBP implications."
@@ -247,7 +318,7 @@ export default function Home() {
                     ].map((item) => (
                       <div
                         key={item.type}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-sm font-semibold text-slate-100">
@@ -281,7 +352,7 @@ export default function Home() {
                     {mockOpportunities.slice(0, 3).map((opp) => (
                       <div
                         key={`${opp.company}-${opp.role}`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -303,7 +374,7 @@ export default function Home() {
                   title="Latest preview"
                   subtitle="The most recent headline returned by your report generator."
                 >
-                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className={insetCard}>
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                       Headline
                     </p>
@@ -320,23 +391,36 @@ export default function Home() {
           ) : null}
 
           {active === "jobOpportunities" ? (
-            <div className="space-y-6">
+            <div className="space-y-8 md:space-y-10">
               <SectionHeader
                 title="Job Opportunities"
-                subtitle="Mock opportunity intelligence: feed → takeaways → role fit analysis."
-                right={<Pill tone="warning">Mock data</Pill>}
+                subtitle={
+                  <>
+                    <p>
+                      DeepSeek currently enhances market intelligence reports. Job ingestion is
+                      not connected yet.
+                    </p>
+                    <p className="mt-2">
+                      Mock opportunity intelligence below is illustrative: feed → takeaways → role
+                      fit analysis.
+                    </p>
+                  </>
+                }
+                right={
+                  <Pill tone="warning">Mock job data — real job ingestion pending</Pill>
+                }
               />
 
-              <div className="grid gap-5 lg:grid-cols-3">
+              <div className="grid gap-6 lg:grid-cols-3">
                 <InfoCard
                   title="Opportunity Feed"
                   subtitle="Top roles worth tracking this week."
                 >
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {mockOpportunities.map((opp) => (
                       <div
                         key={`${opp.company}-${opp.role}`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
@@ -355,6 +439,31 @@ export default function Home() {
                         <p className="mt-3 text-sm text-slate-300">
                           {opp.whyThisFits}
                         </p>
+                        <div className="mt-4 space-y-2">
+                          {isRealJobApplyUrl(opp.applyUrl) ? (
+                            <a
+                              href={opp.applyUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={`inline-flex items-center justify-center ${dt.cardRadius} ${dt.accentBorder} ${dt.accentSoftBg} px-3 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15`}
+                            >
+                              Apply
+                            </a>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                disabled
+                                className={`inline-flex cursor-not-allowed items-center justify-center ${dt.cardRadius} border border-white/10 bg-slate-950/50 px-3 py-2 text-sm font-semibold text-slate-500`}
+                              >
+                                {opp.applyUrl?.trim() ? "Mock only" : "Apply unavailable"}
+                              </button>
+                              <p className={`text-xs ${dt.muted}`}>
+                                Real application link will appear after job ingestion is connected.
+                              </p>
+                            </>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -387,7 +496,7 @@ export default function Home() {
                     {mockOpportunities.slice(0, 2).map((opp) => (
                       <div
                         key={`${opp.company}-${opp.role}-analysis`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <p className="text-sm font-semibold text-slate-100">
                           {opp.company}: {opp.role}
@@ -433,7 +542,7 @@ export default function Home() {
                     {mockSkills.map((s) => (
                       <div
                         key={s.skill}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-sm font-semibold text-slate-100">
@@ -456,7 +565,7 @@ export default function Home() {
                     {mockSkills.map((s) => (
                       <div
                         key={`${s.skill}-evidence`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <p className="text-sm font-semibold text-slate-100">
                           {s.skill}
@@ -475,7 +584,7 @@ export default function Home() {
                     {mockSkills.map((s) => (
                       <div
                         key={`${s.skill}-plan`}
-                        className="rounded-xl border border-white/10 bg-slate-950/40 p-4"
+                        className={insetCard}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-sm font-semibold text-slate-100">
@@ -539,7 +648,7 @@ export default function Home() {
                     subtitle="What to generate next for leadership."
                   >
                     <div className="space-y-3">
-                      <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <div className={insetCard}>
                         <p className="text-sm font-semibold text-slate-100">
                           Convert Drafting → Ready to Present
                         </p>
@@ -548,7 +657,7 @@ export default function Home() {
                           operating metrics.
                         </p>
                       </div>
-                      <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                      <div className={insetCard}>
                         <p className="text-sm font-semibold text-slate-100">
                           Tie each asset to an HRBP output
                         </p>
@@ -565,68 +674,311 @@ export default function Home() {
           ) : null}
 
           {active === "settings" ? (
-            <div className="space-y-6">
+            <div className="mx-auto w-full max-w-none space-y-10 md:space-y-12">
               <SectionHeader
                 title="Settings"
-                subtitle="Mock configuration layout (not yet functional)."
+                subtitle="Mock configuration layout (not yet functional). Layout uses full width so registry tables and job memory stay readable."
                 right={<Pill tone="warning">Read-only</Pill>}
               />
 
-              <div className="grid gap-5 lg:grid-cols-2">
-                <InfoCard title="Sources" subtitle="Where SWIFT pulls signals from.">
-                  <div className="flex flex-wrap gap-2">
-                    {mockSettings.sources.map((s) => (
-                      <Pill key={s}>{s}</Pill>
+              <section className="space-y-4">
+                <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Intelligence pipeline
+                </h2>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      RSS ingestion
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
+                  </div>
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Cleaning rules
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
+                  </div>
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      AI analysis
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">
+                      DeepSeek (optional)
+                    </p>
+                    <p className={`mt-2 text-xs ${dt.muted}`}>
+                      When <code className="text-slate-300">DEEPSEEK_API_KEY</code> and{" "}
+                      <code className="text-slate-300">AI_PROVIDER=deepseek</code> are set on the
+                      server, reports use the API; otherwise the rules-based path runs.
+                    </p>
+                  </div>
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Storage
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-slate-100">
+                      Not connected yet
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Source registry summary
+                </h2>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Total sources
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-50">
+                      {sourceRegistrySummary.total}
+                    </p>
+                  </div>
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Enabled
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-50">
+                      {sourceRegistrySummary.enabled}
+                    </p>
+                  </div>
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      RSS enabled
+                    </p>
+                    <p className="mt-1 text-2xl font-semibold text-slate-50">
+                      {sourceRegistrySummary.rssEnabled}
+                    </p>
+                  </div>
+                  <div className={insetCard}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                      Planned (API / JSON / Manual)
+                    </p>
+                    <p className="mt-1 text-sm font-semibold leading-relaxed text-slate-100">
+                      {sourceRegistrySummary.planned.api} /{" "}
+                      {sourceRegistrySummary.planned.jsonFeed} /{" "}
+                      {sourceRegistrySummary.planned.manual}
+                    </p>
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-4">
+                <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Configuration
+                </h2>
+                <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+                  <InfoCard title="Sources" subtitle="Where SWIFT pulls signals from.">
+                    <div className="flex flex-wrap gap-2">
+                      {mockSettings.sources.map((s) => (
+                        <Pill key={s}>{s}</Pill>
+                      ))}
+                    </div>
+                  </InfoCard>
+
+                  <InfoCard
+                    title="Search Keywords"
+                    subtitle="Queries used to collect market signals."
+                  >
+                    <div className="flex flex-wrap gap-2">
+                      {mockSettings.searchKeywords.map((k) => (
+                        <Pill key={k}>{k}</Pill>
+                      ))}
+                    </div>
+                  </InfoCard>
+
+                  <InfoCard title="Email Recipient" subtitle="Where reports are sent.">
+                    <div className={insetCard}>
+                      <p className="text-sm font-semibold text-slate-100">
+                        {mockSettings.emailRecipient}
+                      </p>
+                      <p className={`mt-2 text-xs ${dt.muted}`}>
+                        Sending is handled server-side by the protected daily cron route.
+                      </p>
+                    </div>
+                  </InfoCard>
+
+                  <InfoCard
+                    title="Refresh Schedule"
+                    subtitle="How often intelligence should refresh."
+                  >
+                    <div className={insetCard}>
+                      <p className="text-sm font-semibold text-slate-100">
+                        {mockSettings.refreshSchedule}
+                      </p>
+                    </div>
+                  </InfoCard>
+
+                  <InfoCard
+                    title="AI Provider"
+                    subtitle="DeepSeek is used only on the server. The browser never sees your API key."
+                  >
+                    <div className={insetCard}>
+                      <p className="text-sm font-semibold text-slate-100">
+                        {mockSettings.aiProvider}
+                      </p>
+                      <p className={`mt-2 text-xs ${dt.muted}`}>
+                        Configure <code className="text-slate-300">DEEPSEEK_API_KEY</code> and{" "}
+                        <code className="text-slate-300">AI_PROVIDER=deepseek</code> in{" "}
+                        <code className="text-slate-300">.env.local</code> (see{" "}
+                        <code className="text-slate-300">.env.local.example</code>). Keys stay in
+                        server environment variables only.
+                      </p>
+                    </div>
+                  </InfoCard>
+
+                  <InfoCard title="Skill Layer" subtitle="Capability layer preset.">
+                    <div className={insetCard}>
+                      <p className="text-sm font-semibold text-slate-100">
+                        {mockSettings.skillLayer}
+                      </p>
+                    </div>
+                  </InfoCard>
+                </div>
+              </section>
+
+              <section className="space-y-6">
+                <InfoCard
+                  title="Job Application Channels"
+                  subtitle="Saved application channels (mock memory until ingestion is connected)."
+                >
+                  <div className={`overflow-x-auto ${dt.cardRadius} ${dt.border}`}>
+                    <table className="min-w-[640px] w-full text-left text-sm md:min-w-0">
+                      <thead className={`${dt.cardInset} text-[11px] uppercase tracking-wide text-slate-400`}>
+                        <tr>
+                          <th className="px-4 py-3 font-semibold">Name</th>
+                          <th className="px-4 py-3 font-semibold">Type</th>
+                          <th className="px-4 py-3 font-semibold">Enabled</th>
+                          <th className="px-4 py-3 font-semibold">Tier</th>
+                          <th className="px-4 py-3 font-semibold">Last checked</th>
+                          <th className="px-4 py-3 font-semibold">URL</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/10">
+                        {jobApplicationChannels.map((c) => (
+                          <tr key={c.id} className="align-top text-slate-200">
+                            <td className="px-4 py-3">
+                              <div className="font-semibold text-slate-100">{c.name}</div>
+                              <div className={`mt-1 text-xs ${dt.muted}`}>{c.topic}</div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <Pill>{c.channelType}</Pill>
+                            </td>
+                            <td className="px-4 py-3">
+                              {c.enabled ? (
+                                <Pill tone="success">Enabled</Pill>
+                              ) : (
+                                <Pill tone="warning">Disabled</Pill>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <Pill>{c.qualityTier}</Pill>
+                            </td>
+                            <td className={`px-4 py-3 text-xs ${dt.muted}`}>
+                              {c.lastCheckedAt ? new Date(c.lastCheckedAt).toLocaleString() : "—"}
+                            </td>
+                            <td className="px-4 py-3">
+                              <a
+                                href={c.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`text-sm font-semibold ${dt.accentText} ${dt.accentTextHover}`}
+                              >
+                                Open
+                              </a>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </InfoCard>
+
+                <InfoCard
+                  title="Historical Job Links"
+                  subtitle="Preserved job links and application status (mock examples)."
+                >
+                  <div className="space-y-4">
+                    {historicalJobLinks.map((j) => (
+                      <div key={j.id} className={insetCard}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-100">{j.role}</p>
+                            <p className={`mt-1 text-xs ${dt.muted}`}>
+                              {j.company} • {j.location} • {j.source}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Pill>{j.fitScore} fit</Pill>
+                            <Pill>{j.applicationStatus}</Pill>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-sm leading-relaxed text-slate-300">{j.whyThisFits}</p>
+                        <div className="mt-4 flex flex-col gap-2">
+                          {isRealJobApplyUrl(j.applyUrl) ? (
+                            <a
+                              href={j.applyUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className={`inline-flex w-fit items-center justify-center ${dt.cardRadius} ${dt.accentBorder} ${dt.accentSoftBg} px-3 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-300/15`}
+                            >
+                              Apply link
+                            </a>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                disabled
+                                className={`inline-flex w-fit cursor-not-allowed items-center justify-center ${dt.cardRadius} border border-white/10 bg-slate-950/50 px-3 py-2 text-sm font-semibold text-slate-500`}
+                              >
+                                {j.applyUrl?.trim() ? "Mock only" : "Apply unavailable"}
+                              </button>
+                              <p className={`text-xs ${dt.muted}`}>
+                                Real application link will appear after job ingestion is connected.
+                              </p>
+                            </>
+                          )}
+                        </div>
+                        {j.notes ? <p className={`mt-3 text-xs ${dt.muted}`}>{j.notes}</p> : null}
+                      </div>
                     ))}
                   </div>
                 </InfoCard>
 
                 <InfoCard
-                  title="Search Keywords"
-                  subtitle="Queries used to collect market signals."
+                  title="Suggested New Channels"
+                  subtitle="Potential new application channels to add (mock suggestions)."
                 >
-                  <div className="flex flex-wrap gap-2">
-                    {mockSettings.searchKeywords.map((k) => (
-                      <Pill key={k}>{k}</Pill>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {suggestedNewChannels.map((c) => (
+                      <div key={c.id} className={insetCard}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-100">{c.channelName}</p>
+                            <p className={`mt-1 text-xs ${dt.muted}`}>{c.channelType}</p>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Pill>{c.priority}</Pill>
+                            <Pill>{c.status}</Pill>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-sm leading-relaxed text-slate-300">{c.reasonToAdd}</p>
+                        <p className={`mt-2 text-xs ${dt.muted}`}>
+                          Expected signal: {c.expectedSignal}
+                        </p>
+                        <div className="mt-3">
+                          <a
+                            href={c.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`text-sm font-semibold ${dt.accentText} ${dt.accentTextHover}`}
+                          >
+                            Open
+                          </a>
+                        </div>
+                      </div>
                     ))}
-                  </div>
-                </InfoCard>
-
-                <InfoCard title="Email Recipient" subtitle="Where reports are sent.">
-                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-                    <p className="text-sm font-semibold text-slate-100">
-                      {mockSettings.emailRecipient}
-                    </p>
-                    <p className="mt-2 text-xs text-slate-400">
-                      Sending is handled server-side by the protected daily cron route.
-                    </p>
-                  </div>
-                </InfoCard>
-
-                <InfoCard
-                  title="Refresh Schedule"
-                  subtitle="How often intelligence should refresh."
-                >
-                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-                    <p className="text-sm font-semibold text-slate-100">
-                      {mockSettings.refreshSchedule}
-                    </p>
-                  </div>
-                </InfoCard>
-
-                <InfoCard title="AI Provider" subtitle="Model provider setting.">
-                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-                    <p className="text-sm font-semibold text-slate-100">
-                      {mockSettings.aiProvider}
-                    </p>
-                  </div>
-                </InfoCard>
-
-                <InfoCard title="Skill Layer" subtitle="Capability layer preset.">
-                  <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
-                    <p className="text-sm font-semibold text-slate-100">
-                      {mockSettings.skillLayer}
-                    </p>
                   </div>
                 </InfoCard>
 
@@ -634,25 +986,25 @@ export default function Home() {
                   title="Source Health"
                   subtitle="Quality control for enabled RSS sources (non-interactive)."
                 >
-                  <div className="space-y-3">
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <div className={insetCard}>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                         Source health
                       </p>
                       <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
                     </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                    <div className={insetCard}>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                         How to inspect
                       </p>
                       <p className="mt-1 text-sm font-semibold text-slate-100">
                         /api/debug/source-health
                       </p>
-                      <p className="mt-2 text-xs text-slate-400">
+                      <p className={`mt-2 text-xs ${dt.muted}`}>
                         Safe to call from the browser. No secrets.
                       </p>
                     </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                    <div className={insetCard}>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                         Known disabled sources
                       </p>
@@ -663,141 +1015,89 @@ export default function Home() {
                     </div>
                   </div>
                 </InfoCard>
+              </section>
 
-                <InfoCard
-                  title="Source Registry"
-                  subtitle="High-quality source inventory for SWIFT (registry only — ingestion comes next)."
-                >
-                  <div className="mb-4 grid gap-3 md:grid-cols-4">
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        RSS ingestion
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Cleaning rules
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-100">Enabled</p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        AI analysis
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-100">
-                        Not connected yet
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Storage
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-100">
-                        Not connected yet
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-4">
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Total sources
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-slate-100">
-                        {sourceRegistrySummary.total}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Enabled
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-slate-100">
-                        {sourceRegistrySummary.enabled}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        RSS enabled
-                      </p>
-                      <p className="mt-1 text-lg font-semibold text-slate-100">
-                        {sourceRegistrySummary.rssEnabled}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Planned (API / JSON / Manual)
-                      </p>
-                      <p className="mt-1 text-sm font-semibold text-slate-100">
-                        {sourceRegistrySummary.planned.api} /{" "}
-                        {sourceRegistrySummary.planned.jsonFeed} /{" "}
-                        {sourceRegistrySummary.planned.manual}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 space-y-4">
-                    {sourceRegistrySummary.grouped.map((group) => (
-                      <div key={group.topic} className="rounded-2xl border border-white/10">
-                        <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-slate-950/30 px-4 py-3">
-                          <p className="text-sm font-semibold text-slate-100">
-                            {group.topic.toUpperCase()}
-                          </p>
-                          <Pill>{group.sources.length} sources</Pill>
-                        </div>
-
-                        <div className="overflow-x-auto">
-                          <table className="min-w-full text-left text-sm">
-                            <thead className="text-[11px] uppercase tracking-wide text-slate-400">
-                              <tr>
-                                <th className="px-4 py-3 font-semibold">Name</th>
-                                <th className="px-4 py-3 font-semibold">Type</th>
-                                <th className="px-4 py-3 font-semibold">Tier</th>
-                                <th className="px-4 py-3 font-semibold">Enabled</th>
-                                <th className="px-4 py-3 font-semibold">Used by</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-white/10">
-                              {group.sources.map((s) => (
-                                <tr key={s.id} className="align-top text-slate-200">
-                                  <td className="px-4 py-3">
-                                    <div className="font-semibold text-slate-100">
-                                      {s.name}
-                                    </div>
-                                    <div className="mt-1 text-xs text-slate-400">
-                                      {s.category}
-                                    </div>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <Pill>{s.sourceType}</Pill>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <Pill>{s.qualityTier}</Pill>
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    {s.enabled ? (
-                                      <Pill tone="success">Enabled</Pill>
-                                    ) : (
-                                      <Pill tone="warning">Planned</Pill>
-                                    )}
-                                  </td>
-                                  <td className="px-4 py-3">
-                                    <div className="flex flex-wrap gap-2">
-                                      {s.usedBy.map((u) => (
-                                        <Pill key={`${s.id}-${u}`}>{u}</Pill>
-                                      ))}
-                                    </div>
-                                  </td>
-                                </tr>
+              <InfoCard
+                title="Source Registry"
+                subtitle="All sources in one scan-friendly view. Desktop: table. Mobile: stacked cards."
+                className="w-full"
+              >
+                <div className={`hidden lg:block ${dt.cardRadius} ${dt.border} overflow-x-auto`}>
+                  <table className="min-w-full text-left text-sm">
+                    <thead className={`${dt.cardInset} text-[11px] uppercase tracking-wide text-slate-400`}>
+                      <tr>
+                        <th className="px-4 py-3 font-semibold">Name</th>
+                        <th className="px-4 py-3 font-semibold">Topic</th>
+                        <th className="px-4 py-3 font-semibold">Type</th>
+                        <th className="px-4 py-3 font-semibold">Tier</th>
+                        <th className="px-4 py-3 font-semibold">Enabled</th>
+                        <th className="px-4 py-3 font-semibold">Used by</th>
+                        <th className="px-4 py-3 font-semibold">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/10">
+                      {registryTableRows.map((s) => (
+                        <tr key={s.id} className="align-top text-slate-200">
+                          <td className="px-4 py-3 font-semibold text-slate-100">{s.name}</td>
+                          <td className="px-4 py-3 text-xs uppercase text-slate-300">{s.topic}</td>
+                          <td className="px-4 py-3">
+                            <Pill>{s.sourceType}</Pill>
+                          </td>
+                          <td className="px-4 py-3">
+                            <Pill className={tierPillLayout}>{s.qualityTier}</Pill>
+                          </td>
+                          <td className="px-4 py-3">
+                            {s.enabled ? (
+                              <Pill tone="success">Enabled</Pill>
+                            ) : (
+                              <Pill tone="warning">Off</Pill>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex max-w-[14rem] flex-wrap items-center gap-1.5">
+                              {s.usedBy.map((u) => (
+                                <Pill key={`${s.id}-${u}`}>{u}</Pill>
                               ))}
-                            </tbody>
-                          </table>
-                        </div>
+                            </div>
+                          </td>
+                          <td className={`max-w-xs px-4 py-3 text-xs leading-relaxed ${dt.muted}`}>
+                            {s.notes}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="space-y-3 lg:hidden">
+                  {registryTableRows.map((s) => (
+                    <div key={`m-${s.id}`} className={insetCard}>
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <p className="text-sm font-semibold text-slate-100">{s.name}</p>
+                        <Pill>{s.topic}</Pill>
                       </div>
-                    ))}
-                  </div>
-                </InfoCard>
-              </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <Pill>{s.sourceType}</Pill>
+                        <Pill className={tierPillLayout}>{s.qualityTier}</Pill>
+                        {s.enabled ? (
+                          <Pill tone="success">Enabled</Pill>
+                        ) : (
+                          <Pill tone="warning">Off</Pill>
+                        )}
+                      </div>
+                      <p className={`mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500`}>
+                        Used by
+                      </p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {s.usedBy.map((u) => (
+                          <Pill key={`${s.id}-m-${u}`}>{u}</Pill>
+                        ))}
+                      </div>
+                      <p className={`mt-3 text-xs leading-relaxed ${dt.muted}`}>{s.notes}</p>
+                    </div>
+                  ))}
+                </div>
+              </InfoCard>
             </div>
           ) : null}
         </div>

@@ -17,6 +17,7 @@ export const mockOpportunities: JobOpportunity[] = [
     location: "London (Hybrid)",
     source: "LinkedIn",
     url: "https://example.com/jobs/axiom-labs-hrbp-ai",
+    applyUrl: "https://example.com/apply/axiom-labs-hrbp-ai",
     dateFound: nowIso(),
     fitScore: 86,
     seniorityFit: "High",
@@ -34,6 +35,7 @@ export const mockOpportunities: JobOpportunity[] = [
     location: "Remote (EU)",
     source: "Company site",
     url: "https://example.com/jobs/ledgerline-people-partner-gtm",
+    applyUrl: "https://example.com/apply/ledgerline-people-partner-gtm",
     dateFound: nowIso(),
     fitScore: 81,
     seniorityFit: "Medium",
@@ -51,6 +53,7 @@ export const mockOpportunities: JobOpportunity[] = [
     location: "Dublin (Onsite)",
     source: "Recruiter",
     url: "https://example.com/jobs/northbridge-web3-hrbp-risk",
+    applyUrl: "https://example.com/apply/northbridge-web3-hrbp-risk",
     dateFound: nowIso(),
     fitScore: 77,
     seniorityFit: "High",
@@ -372,7 +375,7 @@ export const mockSettings = {
   ],
   emailRecipient: "raychen@company.com",
   refreshSchedule: "Daily at 06:30 (Europe/London)",
-  aiProvider: "OpenAI (mock)",
+  aiProvider: "DeepSeek (server-side)",
   skillLayer: "HRBP Operator Layer v0.2",
 };
 

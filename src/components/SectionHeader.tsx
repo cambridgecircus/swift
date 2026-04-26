@@ -1,28 +1,37 @@
 import type { ReactNode } from "react";
 
+import { designTokens as dt } from "@/lib/designTokens";
+
 export default function SectionHeader({
   title,
   subtitle,
   right,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: ReactNode;
   right?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col justify-between gap-4 border-b border-white/10 pb-5 md:flex-row md:items-end">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-50 md:text-3xl">
+    <div
+      className={`flex flex-col gap-5 border-b ${dt.border} pb-6 md:flex-row md:items-end md:justify-between`}
+    >
+      <div className="min-w-0">
+        <h1 className="text-2xl font-semibold tracking-tight text-slate-50 sm:text-3xl md:text-[1.75rem] md:leading-tight">
           {title}
         </h1>
         {subtitle ? (
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">
+          <div
+            className={`mt-2 max-w-3xl text-sm leading-relaxed sm:text-[0.9375rem] ${dt.muted}`}
+          >
             {subtitle}
-          </p>
+          </div>
         ) : null}
       </div>
-      {right ? <div className="flex items-center gap-3">{right}</div> : null}
+      {right ? (
+        <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-center md:pb-0.5">
+          {right}
+        </div>
+      ) : null}
     </div>
   );
 }
-
