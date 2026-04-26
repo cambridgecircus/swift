@@ -164,3 +164,37 @@ export type SwiftReport = {
   learningAssetChanges: LearningAssetHistory[];
 };
 
+export type SourceType =
+  | "rss"
+  | "json_feed"
+  | "api"
+  | "website"
+  | "newsletter"
+  | "job_board"
+  | "manual";
+
+export type SourceTopic = "web3" | "ai" | "hr" | "jobs" | "learning";
+
+export type SwiftSection =
+  | "dashboard"
+  | "job_opportunities"
+  | "skills_to_pick_up"
+  | "learning_assets"
+  | "settings";
+
+export type QualityTier = "Tier 1" | "Tier 2" | "Tier 3";
+
+export type SourceRegistryItem = {
+  id: string;
+  name: string;
+  sourceType: SourceType;
+  topic: SourceTopic;
+  category: MarketCategory;
+  usedBy: SwiftSection[];
+  qualityTier: QualityTier;
+  url: string;
+  enabled: boolean;
+  accessType: "public" | "api_key_required" | "manual_review";
+  notes: string;
+};
+

@@ -14,6 +14,7 @@ import {
   mockSettings,
   mockSkills,
 } from "@/lib/mockData";
+import { sourceRegistry } from "@/lib/sourceRegistry";
 
 type DashboardBrief = {
   title: string;
@@ -108,6 +109,30 @@ export default function Home() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [lastHeadline, setLastHeadline] = useState<string | null>(null);
+
+  const sourceRegistrySummary = useMemo(() => {
+    const total = sourceRegistry.length;
+    const enabled = sourceRegistry.filter((s) => s.enabled).length;
+    const rssEnabled = sourceRegistry.filter(
+      (s) => s.enabled && s.sourceType === "rss",
+    ).length;
+    const planned = {
+      api: sourceRegistry.filter((s) => !s.enabled && s.sourceType === "api").length,
+      jsonFeed: sourceRegistry.filter((s) => !s.enabled && s.sourceType === "json_feed")
+        .length,
+      manual: sourceRegistry.filter(
+        (s) => !s.enabled && (s.sourceType === "manual" || s.accessType === "manual_review"),
+      ).length,
+    };
+
+    const topics = ["web3", "ai", "hr", "jobs", "learning"] as const;
+    const grouped = topics.map((topic) => ({
+      topic,
+      sources: sourceRegistry.filter((s) => s.topic === topic),
+    }));
+
+    return { total, enabled, rssEnabled, planned, grouped };
+  }, []);
 
   async function refreshIntelligencePreview() {
     setRefreshing(true);
@@ -602,6 +627,109 @@ export default function Home() {
                     <p className="text-sm font-semibold text-slate-100">
                       {mockSettings.skillLayer}
                     </p>
+                  </div>
+                </InfoCard>
+
+                <InfoCard
+                  title="Source Registry"
+                  subtitle="High-quality source inventory for SWIFT (registry only — ingestion comes next)."
+                >
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Total sources
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-slate-100">
+                        {sourceRegistrySummary.total}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Enabled
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-slate-100">
+                        {sourceRegistrySummary.enabled}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        RSS enabled
+                      </p>
+                      <p className="mt-1 text-lg font-semibold text-slate-100">
+                        {sourceRegistrySummary.rssEnabled}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Planned (API / JSON / Manual)
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">
+                        {sourceRegistrySummary.planned.api} /{" "}
+                        {sourceRegistrySummary.planned.jsonFeed} /{" "}
+                        {sourceRegistrySummary.planned.manual}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 space-y-4">
+                    {sourceRegistrySummary.grouped.map((group) => (
+                      <div key={group.topic} className="rounded-2xl border border-white/10">
+                        <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-slate-950/30 px-4 py-3">
+                          <p className="text-sm font-semibold text-slate-100">
+                            {group.topic.toUpperCase()}
+                          </p>
+                          <Pill>{group.sources.length} sources</Pill>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="min-w-full text-left text-sm">
+                            <thead className="text-[11px] uppercase tracking-wide text-slate-400">
+                              <tr>
+                                <th className="px-4 py-3 font-semibold">Name</th>
+                                <th className="px-4 py-3 font-semibold">Type</th>
+                                <th className="px-4 py-3 font-semibold">Tier</th>
+                                <th className="px-4 py-3 font-semibold">Enabled</th>
+                                <th className="px-4 py-3 font-semibold">Used by</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-white/10">
+                              {group.sources.map((s) => (
+                                <tr key={s.id} className="align-top text-slate-200">
+                                  <td className="px-4 py-3">
+                                    <div className="font-semibold text-slate-100">
+                                      {s.name}
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                      {s.category}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <Pill>{s.sourceType}</Pill>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <Pill>{s.qualityTier}</Pill>
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    {s.enabled ? (
+                                      <Pill tone="success">Enabled</Pill>
+                                    ) : (
+                                      <Pill tone="warning">Planned</Pill>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex flex-wrap gap-2">
+                                      {s.usedBy.map((u) => (
+                                        <Pill key={`${s.id}-${u}`}>{u}</Pill>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </InfoCard>
               </div>
