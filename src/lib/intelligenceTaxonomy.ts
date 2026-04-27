@@ -465,6 +465,14 @@ export function isExcludedGenericContent(blobLower: string): boolean {
 export function excludedGenericReason(blobLower: string): string | null {
   const s = blobLower;
 
+  const hasAnyWorkforceEventCue = (text: string): boolean => {
+    // IMPORTANT: must not call is*Qualified() to avoid recursion.
+    const exp = hasStrongExpansion(text) || (hasCompanyOrgActionCue(text) && hasWorkforceOrFootprintCue(text));
+    const down = hasAny(text, DOWNSIZING_TERMS);
+    const restruct = hasAny(text, RESTRUCTURING_TERMS) && hasAny(text, ["team", "organi", "operating model", "roles", "headcount", "workforce", "consultation", "works council"]);
+    return exp || down || restruct;
+  };
+
   // HR learning / role-definition / thought-leadership patterns (non-event).
   const learningish = [
     "all you need to know",
@@ -492,7 +500,7 @@ export function excludedGenericReason(blobLower: string): string | null {
   ] as const;
   if (learningish.some((p) => s.includes(p))) {
     // Allow through only if there's explicit workforce event language elsewhere.
-    if (!isExpansionQualified(s) && !isDownsizingQualified(s) && !isRestructuringQualified(s)) {
+    if (!hasAnyWorkforceEventCue(s)) {
       return "Excluded: HR learning / role-definition article, no workforce event signal.";
     }
   }
@@ -516,7 +524,7 @@ export function excludedGenericReason(blobLower: string): string | null {
     "for creators",
   ] as const;
   if (productish.some((p) => s.includes(p))) {
-    if (!isDownsizingQualified(s) && !isRestructuringQualified(s) && !isExpansionQualified(s)) {
+    if (!hasAnyWorkforceEventCue(s)) {
       return "Excluded: product update / use-case content without workforce or org-change signal.";
     }
   }

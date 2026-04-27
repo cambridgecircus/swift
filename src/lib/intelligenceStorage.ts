@@ -836,6 +836,48 @@ export async function getWeeklySummary(days = 7): Promise<WeeklySummaryResult> {
     }
 
     const runs = (runsData ?? []) as Record<string, unknown>[];
+    if (runs.length === 0) {
+      return {
+        status: "ok",
+        storageConfigured: true,
+        periodDays,
+        runCount: 0,
+        manualRunCount: 0,
+        scheduledRunCount: 0,
+        totalRawSignals: 0,
+        totalCleanSignals: 0,
+        totalLiveJobs: 0,
+        importedLinkedInJobCount: 0,
+        employmentLawSignals: [],
+        employmentLawSignalCount: 0,
+        employmentLawJurisdictions: [],
+        employmentLawThemes: [],
+        expansionSignals: [],
+        downsizingSignals: [],
+        restructuringSignals: [],
+        expansionSignalCount: 0,
+        downsizingSignalCount: 0,
+        restructuringSignalCount: 0,
+        excludedExpansionCandidates: [],
+        excludedDownsizingCandidates: [],
+        expansionVsDownsizingTrend: "No runs captured in this window.",
+        expansionPeopleImplication: undefined,
+        expansionSuggestedHrbpLine: undefined,
+        classificationNotes: undefined,
+        recommendedEmploymentLawFocus: [],
+        recommendedOrgPlanningFocus: [],
+        liveJobs: [],
+        liveJobsTotalDeduped: 0,
+        liveJobsHasMore: false,
+        sourceExamples: [],
+        repeatedCompanies: [],
+        topSources: [],
+        topThemes: [],
+        recommendedLearningFocus: [],
+        suggestedNextActions: DEFAULT_NEXT_ACTIONS,
+        latestRuns: [],
+      };
+    }
     const runIds = runs
       .map((r) => r.id)
       .filter((id): id is string => typeof id === "string");
