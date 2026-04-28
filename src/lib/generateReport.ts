@@ -1,4 +1,5 @@
 import { buildDeterministicContractIntel, shouldUseDeepSeek, generateDeepSeekReport } from "@/lib/deepseekClient";
+import { fetchLinkedInJobAlertEmails } from "@/lib/gmailLinkedIn";
 import { isRealJobApplyUrl } from "@/lib/jobApplyUrl";
 import { gatherReportStorageContext } from "@/lib/reportStorageContext";
 import { getWeeklySummary } from "@/lib/intelligenceStorage";
@@ -81,6 +82,29 @@ export type IntelligenceReport = {
   skillsToPickUp?: SkillEmailRow[];
   learningAssets?: LearningEmailRow[];
 };
+
+function extractLocationFromLinkedInAlert(text: string): string | null {
+  const t = text.replace(/\s{2,}/g, " ").trim();
+  if (!t) return null;
+
+  // Common email patterns: "Location: X" or "Location X" in summary blocks.
+  const m1 = t.match(/\bLocation\b\s*[:\-–]\s*([A-Za-z][^.|,\n]{0,60})/i);
+  if (m1?.[1]) return m1[1].trim();
+
+  // Heuristic: look for "in <place>" close to the start.
+  const head = t.slice(0, 320);
+  const m2 = head.match(/\b(in|across)\s+([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+){0,3})\b/);
+  if (m2?.[2]) return m2[2].trim();
+
+  return null;
+}
+
+function extractFirstRealUrlFromText(text: string): string | undefined {
+  const m = text.match(/https?:\/\/[^\s\])"'<>]+/i);
+  if (!m?.[0]) return undefined;
+  const u = m[0].trim();
+  return isRealJobApplyUrl(u) ? u : undefined;
+}
 
 function ctxJobToHistoricalLink(j: Record<string, unknown>, idx: number): HistoricalJobLink | null {
   const applyUrl = typeof j.applyUrl === "string" ? j.applyUrl.trim() : "";
@@ -369,6 +393,23 @@ export async function generateReport(options?: {
   const weeklyPattern = weeklyPatternFromSummary(weekly);
   const jobDefaults = buildJobDefaultsFromCtx(ctx?.jobOpportunities ?? []);
 
+  const gmailLinkedInAlerts = await fetchLinkedInJobAlertEmails().catch(() => []);
+  const gmailLinkedInRows: LiveJobEmailRow[] = (gmailLinkedInAlerts ?? []).slice(0, 10).map((email) => {
+    const location = extractLocationFromLinkedInAlert(email.text) ?? "Location from LinkedIn alert";
+    const url = extractFirstRealUrlFromText(email.text);
+    return {
+      role: email.subject || "LinkedIn job alert",
+      company: "LinkedIn Job Alerts",
+      location,
+      source: "LinkedIn Gmail Alert",
+      fitScore: 85,
+      applyUrl: url,
+      sourceUrl: url,
+      whyThisFits:
+        "Saved LinkedIn Job Alert matching your SWIFT Web3 × AI HRBP search; open the alert email to review role details and apply.",
+    };
+  });
+
   const jobRows: LiveJobEmailRow[] = (ctx?.jobOpportunities ?? [])
     .flatMap((r) => {
       const apply = typeof r.applyUrl === "string" ? r.applyUrl : "";
@@ -390,6 +431,8 @@ export async function generateReport(options?: {
     .sort((a, b) => b.fitScore - a.fitScore)
     .slice(0, 12);
 
+  const mergedJobRows: LiveJobEmailRow[] = [...gmailLinkedInRows, ...jobRows].slice(0, 12);
+
   const skills: SkillEmailRow[] = (skillsLearning?.skills ?? []).slice(0, 5).map((s) => ({
     skill: s.title,
     priorityScore: `${s.priority} (${s.priorityScore}/100)`,
@@ -405,7 +448,7 @@ export async function generateReport(options?: {
     intendedOutput: a.intendedOutput,
   }));
 
-  const extras = { weeklyPattern, jobRows, skills, learning };
+  const extras = { weeklyPattern, jobRows: mergedJobRows, skills, learning };
 
   if (cleanedSignals.length > 0) {
     if (shouldUseDeepSeek()) {
@@ -416,7 +459,11 @@ export async function generateReport(options?: {
         weeklyPattern,
       });
       if (aiContract) {
-        return mapAIReportContractToIntelligenceReport(aiContract, generatedAt, weeklyPattern);
+        const mapped = mapAIReportContractToIntelligenceReport(aiContract, generatedAt, weeklyPattern);
+        return {
+          ...mapped,
+          liveJobOpportunities: [...gmailLinkedInRows, ...(mapped.liveJobOpportunities ?? [])].slice(0, 12),
+        };
       }
     }
 
@@ -444,7 +491,7 @@ export async function generateReport(options?: {
       "Help leaders separate work that can be automated from work requiring judgment, trust, and stakeholder navigation.",
     ],
     thisWeekPattern: weeklyPattern || undefined,
-    liveJobOpportunities: jobRows.slice(0, 5),
+    liveJobOpportunities: mergedJobRows.slice(0, 5),
     skillsToPickUp: skills.slice(0, 3),
     learningAssets: learning.slice(0, 3),
   };
