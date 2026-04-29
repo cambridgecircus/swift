@@ -6,6 +6,9 @@ export async function GET(request: Request) {
   const forceRefresh = ["1", "true", "yes"].includes(
     (url.searchParams.get("refresh") ?? "").toLowerCase(),
   );
+  if (forceRefresh) {
+    console.info("[LINKEDIN_GMAIL] force refresh requested");
+  }
   const { emails, meta } = await getLinkedInJobEmailsCached({
     forceRefresh,
     awaitRefresh: forceRefresh,

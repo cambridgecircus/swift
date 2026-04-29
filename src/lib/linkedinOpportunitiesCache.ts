@@ -42,7 +42,7 @@ function cacheMeta(reason: CacheReason): LinkedInCacheMeta {
 async function refreshCache(reason: "expired" | "miss" | "manual"): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
 
-  console.info(`[LINKEDIN_CACHE] background refresh started reason=${reason}`);
+  console.info(`[LINKEDIN_CACHE] Gmail fetch started reason=${reason}`);
   refreshInFlight = (async () => {
     try {
       const emails = await fetchLinkedInJobAlertEmails({
@@ -52,9 +52,12 @@ async function refreshCache(reason: "expired" | "miss" | "manual"): Promise<void
         emails,
         updatedAtMs: nowMs(),
       };
-      console.info(`[LINKEDIN_CACHE] background refresh completed count=${emails.length}`);
+      console.info(`[LINKEDIN_CACHE] Gmail fetch completed count=${emails.length}`);
     } catch (error) {
       console.error("[LINKEDIN_CACHE] background refresh failed", error);
+      if (reason === "manual") {
+        throw error;
+      }
     } finally {
       refreshInFlight = null;
     }

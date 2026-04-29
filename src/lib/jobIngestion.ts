@@ -34,7 +34,10 @@ export type LiveJobIngestionResponse = {
     lastUpdatedAt: string | null;
     ttlMs: number;
     forceRefresh?: boolean;
+    error?: string;
   };
+  linkedInOpportunities?: CleanJobOpportunity[];
+  linkedInOpportunitiesMergedCount?: number;
 };
 
 const ATS_HOST_MARKERS = [

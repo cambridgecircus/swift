@@ -149,6 +149,9 @@ export async function GET(request: Request) {
   const forceLinkedInRefresh = ["1", "true", "yes"].includes(
     (url.searchParams.get("linkedinRefresh") ?? "").toLowerCase(),
   );
+  if (forceLinkedInRefresh) {
+    console.info("[LINKEDIN_JOBS] force refresh requested");
+  }
   const data = await withTimeout(getLiveJobOpportunities(), 12_000, {
     status: "ok" as const,
     checkedAt: new Date().toISOString(),
@@ -163,18 +166,9 @@ export async function GET(request: Request) {
     awaitRefresh: forceLinkedInRefresh,
   });
   if (forceLinkedInRefresh && linkedInCached.meta.error) {
-    return jsonResponseNoStore(
-      {
-        ok: false,
-        message: "LinkedIn Gmail refresh failed",
-        error: linkedInCached.meta.error,
-        linkedInCache: {
-          ...linkedInCached.meta,
-          forceRefresh: forceLinkedInRefresh,
-        },
-      },
-      { status: 500 },
-    );
+    console.error("[LINKEDIN_JOBS] Gmail refresh failed (returning non-LinkedIn jobs)", {
+      error: linkedInCached.meta.error,
+    });
   }
   const gmailEmails = linkedInCached.emails;
   const gmailUrls = (gmailEmails ?? [])
@@ -262,6 +256,25 @@ export async function GET(request: Request) {
   };
 
   let importedLinkedIn: Record<string, unknown>[] = [];
+  if (forceLinkedInRefresh && linkedInCached.meta.error) {
+    const merged = [...gmailOpps, ...data.opportunities].map((o) => ({
+      ...o,
+      applyUrl: scrubPlaceholderUrl(o.applyUrl),
+      sourceUrl: scrubPlaceholderUrl(o.sourceUrl),
+    }));
+    console.info(`[LINKEDIN_JOBS] LinkedIn opportunities merged count=${gmailOpps.length}`);
+    return jsonResponseNoStore({
+      ...data,
+      opportunities: merged,
+      importedLinkedIn: [],
+      linkedInOpportunities: gmailOpps,
+      linkedInOpportunitiesMergedCount: gmailOpps.length,
+      linkedInCache: {
+        ...linkedInCached.meta,
+        forceRefresh: forceLinkedInRefresh,
+      },
+    });
+  }
   try {
     const rows = await fetchRecentImportedJobAlerts(50);
     importedLinkedIn = rows.map((r) => {
@@ -297,6 +310,7 @@ export async function GET(request: Request) {
       if (isPlaceholderLinkedInUrl(o.sourceUrl)) o.sourceUrl = scrubPlaceholderUrl(o.sourceUrl);
     }
     merged.sort((a, b) => b.fitScore - a.fitScore || a.role.localeCompare(b.role));
+    console.info(`[LINKEDIN_JOBS] LinkedIn opportunities merged count=${gmailOpps.length}`);
     return jsonResponseNoStore({
       ...data,
       opportunities: merged,
@@ -305,6 +319,8 @@ export async function GET(request: Request) {
         ...linkedInCached.meta,
         forceRefresh: forceLinkedInRefresh,
       },
+      linkedInOpportunities: gmailOpps,
+      linkedInOpportunitiesMergedCount: gmailOpps.length,
     });
   } catch {
     importedLinkedIn = [];
@@ -314,6 +330,7 @@ export async function GET(request: Request) {
     applyUrl: scrubPlaceholderUrl(o.applyUrl),
     sourceUrl: scrubPlaceholderUrl(o.sourceUrl),
   }));
+  console.info(`[LINKEDIN_JOBS] LinkedIn opportunities merged count=${gmailOpps.length}`);
   return jsonResponseNoStore({
     ...data,
     opportunities: merged,
@@ -322,5 +339,7 @@ export async function GET(request: Request) {
       ...linkedInCached.meta,
       forceRefresh: forceLinkedInRefresh,
     },
+    linkedInOpportunities: gmailOpps,
+    linkedInOpportunitiesMergedCount: gmailOpps.length,
   });
 }
