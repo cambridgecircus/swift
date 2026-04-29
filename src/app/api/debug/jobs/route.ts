@@ -5,6 +5,7 @@ import {
   fetchRecentImportedJobAlerts,
   importedAlertToCleanOpportunity,
   importedAlertToJobRecord,
+  normalizeLinkedinJobUrl,
 } from "@/lib/linkedinJobAlertIngestion";
 
 export const dynamic = "force-dynamic";
@@ -80,10 +81,51 @@ function isNoisyLinkedInAlertText(input: string): boolean {
     v.includes("your job alert for") ||
     v.includes("boolean search") ||
     v.includes("saved search") ||
+    v.includes("hrbp") ||
+    v.includes("hr business partner") ||
     v.includes("((") ||
     v.includes("\" or ") ||
     v.length > 140
   );
+}
+
+function canonicalizeLinkedInJobUrl(rawUrl: string): string {
+  const normalized = normalizeLinkedinJobUrl(rawUrl);
+  try {
+    const u = new URL(normalized);
+    u.hash = "";
+    // Keep paths stable and remove tracking query params.
+    u.search = "";
+    const m = u.pathname.match(/\/jobs\/view\/(\d+)/i) ?? u.pathname.match(/\/comm\/jobs\/view\/(\d+)/i);
+    const id = m?.[1];
+    if (id) return `https://www.linkedin.com/jobs/view/${id}`;
+    return u.toString();
+  } catch {
+    return normalized;
+  }
+}
+
+function toConciseOpportunity(o: Record<string, unknown>): Record<string, unknown> {
+  const applyUrlRaw = typeof o.applyUrl === "string" ? o.applyUrl : "";
+  const applyUrl = applyUrlRaw.includes("linkedin.com") ? canonicalizeLinkedInJobUrl(applyUrlRaw) : applyUrlRaw;
+  const gapsVal = o.gaps;
+  const gaps = Array.isArray(gapsVal) ? gapsVal.filter((x): x is string => typeof x === "string") : [];
+
+  return {
+    id: typeof o.id === "string" ? o.id : "",
+    role: typeof o.role === "string" ? o.role : "",
+    company: typeof o.company === "string" ? o.company : "",
+    location: typeof o.location === "string" ? o.location : "",
+    source: typeof o.source === "string" ? o.source : "",
+    applyUrl,
+    dateFound: typeof o.dateFound === "string" ? o.dateFound : new Date().toISOString(),
+    fitScore: typeof o.fitScore === "number" ? o.fitScore : 0,
+    status: (o.status === "to_review" || o.status === "live" ? o.status : undefined) ?? "live",
+    needsLinkedInReview: Boolean(o.needsLinkedInReview),
+    recommendedAction: typeof o.recommendedAction === "string" ? o.recommendedAction : "",
+    gaps,
+    whyThisFits: typeof o.whyThisFits === "string" ? o.whyThisFits : "",
+  };
 }
 
 function looksLikeLocation(line: string): boolean {
@@ -178,7 +220,7 @@ export async function GET(request: Request) {
   const gmailPrimaryUrls = (gmailEmails ?? [])
     .map((e) => (typeof e.primaryUrl === "string" ? e.primaryUrl : ""))
     .filter((u): u is string => Boolean(u));
-  const fallbackGmailUrl = gmailPrimaryUrls[0] ?? gmailUrls[0] ?? "";
+  const fallbackGmailUrl = canonicalizeLinkedInJobUrl(gmailPrimaryUrls[0] ?? gmailUrls[0] ?? "");
 
   const gmailOpps = (() => {
     const out: typeof data.opportunities = [];
@@ -189,7 +231,8 @@ export async function GET(request: Request) {
     let fallbackUsedCount = 0;
 
     for (const email of gmailEmails) {
-      for (const url of email.urls ?? []) {
+      for (const rawUrl of email.urls ?? []) {
+        const url = canonicalizeLinkedInJobUrl(rawUrl);
         const id = extractLinkedInJobId(url);
         const key = id ? `job:${id}` : `url:${url.toLowerCase()}`;
         if (seen.has(key)) continue;
@@ -204,17 +247,17 @@ export async function GET(request: Request) {
         const role =
           parsed.title?.trim() && !isNoisyLinkedInAlertText(parsed.title)
             ? parsed.title.trim()
-            : "LinkedIn Job Alert - Needs Review";
+            : "LinkedIn Job Alert — Needs Review";
         const company =
           parsed.company?.trim() && !isNoisyLinkedInAlertText(parsed.company)
             ? parsed.company.trim()
-            : "Company not parsed";
+            : "Company to verify";
         const location =
           parsed.location?.trim() && !isNoisyLinkedInAlertText(parsed.location)
             ? parsed.location.trim()
-            : "Location not parsed";
+            : "Location to verify";
         const foundDate = email.date || new Date().toISOString();
-        const tupleKey = `${role.toLowerCase()}|${company.toLowerCase()}|${location.toLowerCase()}|${foundDate}`;
+        const tupleKey = `${url.toLowerCase()}|${role.toLowerCase()}|${company.toLowerCase()}|${location.toLowerCase()}|${foundDate}`;
         if (seenTuple.has(tupleKey)) continue;
         seenTuple.add(tupleKey);
 
@@ -261,14 +304,15 @@ export async function GET(request: Request) {
     const merged = [...gmailOpps, ...data.opportunities].map((o) => ({
       ...o,
       applyUrl: scrubPlaceholderUrl(o.applyUrl),
-      sourceUrl: scrubPlaceholderUrl(o.sourceUrl),
     }));
     console.info(`[LINKEDIN_JOBS] LinkedIn opportunities merged count=${gmailOpps.length}`);
     return jsonResponseNoStore({
-      ...data,
-      opportunities: merged,
-      importedLinkedIn: [],
-      linkedInOpportunities: gmailOpps,
+      status: data.status,
+      checkedAt: data.checkedAt,
+      rawCount: data.rawCount,
+      cleanCount: data.cleanCount,
+      opportunities: merged.map((o) => toConciseOpportunity(o as Record<string, unknown>)),
+      linkedInOpportunities: gmailOpps.map((o) => toConciseOpportunity(o as Record<string, unknown>)),
       linkedInOpportunitiesMergedCount: gmailOpps.length,
       linkedInCache: {
         ...linkedInCached.meta,
@@ -314,15 +358,17 @@ export async function GET(request: Request) {
     merged.sort((a, b) => b.fitScore - a.fitScore || a.role.localeCompare(b.role));
     console.info(`[LINKEDIN_JOBS] LinkedIn opportunities merged count=${gmailOpps.length}`);
     return jsonResponseNoStore({
-      ...data,
-      opportunities: merged,
-      importedLinkedIn,
+      status: data.status,
+      checkedAt: data.checkedAt,
+      rawCount: data.rawCount,
+      cleanCount: data.cleanCount,
+      opportunities: merged.map((o) => toConciseOpportunity(o as Record<string, unknown>)),
+      linkedInOpportunities: gmailOpps.map((o) => toConciseOpportunity(o as Record<string, unknown>)),
+      linkedInOpportunitiesMergedCount: gmailOpps.length,
       linkedInCache: {
         ...linkedInCached.meta,
         forceRefresh: forceLinkedInRefresh,
       },
-      linkedInOpportunities: gmailOpps,
-      linkedInOpportunitiesMergedCount: gmailOpps.length,
     });
   } catch {
     importedLinkedIn = [];
@@ -330,18 +376,19 @@ export async function GET(request: Request) {
   const merged = [...gmailOpps, ...data.opportunities].map((o) => ({
     ...o,
     applyUrl: scrubPlaceholderUrl(o.applyUrl),
-    sourceUrl: scrubPlaceholderUrl(o.sourceUrl),
   }));
   console.info(`[LINKEDIN_JOBS] LinkedIn opportunities merged count=${gmailOpps.length}`);
   return jsonResponseNoStore({
-    ...data,
-    opportunities: merged,
-    importedLinkedIn,
+    status: data.status,
+    checkedAt: data.checkedAt,
+    rawCount: data.rawCount,
+    cleanCount: data.cleanCount,
+    opportunities: merged.map((o) => toConciseOpportunity(o as Record<string, unknown>)),
+    linkedInOpportunities: gmailOpps.map((o) => toConciseOpportunity(o as Record<string, unknown>)),
+    linkedInOpportunitiesMergedCount: gmailOpps.length,
     linkedInCache: {
       ...linkedInCached.meta,
       forceRefresh: forceLinkedInRefresh,
     },
-    linkedInOpportunities: gmailOpps,
-    linkedInOpportunitiesMergedCount: gmailOpps.length,
   });
 }
