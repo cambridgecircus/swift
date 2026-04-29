@@ -4,7 +4,6 @@ import { getLinkedInJobEmailsCached } from "@/lib/linkedinOpportunitiesCache";
 import {
   fetchRecentImportedJobAlerts,
   importedAlertToCleanOpportunity,
-  importedAlertToJobRecord,
   normalizeLinkedinJobUrl,
 } from "@/lib/linkedinJobAlertIngestion";
 
@@ -299,7 +298,6 @@ export async function GET(request: Request) {
     return u;
   };
 
-  let importedLinkedIn: Record<string, unknown>[] = [];
   if (forceLinkedInRefresh && linkedInCached.meta.error) {
     const merged = [...gmailOpps, ...data.opportunities].map((o) => ({
       ...o,
@@ -323,14 +321,6 @@ export async function GET(request: Request) {
   }
   try {
     const rows = await fetchRecentImportedJobAlerts(50);
-    importedLinkedIn = rows.map((r) => {
-      const rec = importedAlertToJobRecord(r);
-      const apply = typeof rec.applyUrl === "string" ? rec.applyUrl : "";
-      const src = typeof rec.sourceUrl === "string" ? rec.sourceUrl : "";
-      if (apply && isPlaceholderLinkedInUrl(apply)) rec.applyUrl = scrubPlaceholderUrl(apply);
-      if (src && isPlaceholderLinkedInUrl(src)) rec.sourceUrl = scrubPlaceholderUrl(src);
-      return rec;
-    });
     const linkedOpps = rows.map((r) => {
       const opp = importedAlertToCleanOpportunity(r);
       opp.applyUrl = scrubPlaceholderUrl(opp.applyUrl);
@@ -371,7 +361,7 @@ export async function GET(request: Request) {
       },
     });
   } catch {
-    importedLinkedIn = [];
+    // Fall through to Gmail + public-board opportunities when stored imports are unavailable.
   }
   const merged = [...gmailOpps, ...data.opportunities].map((o) => ({
     ...o,

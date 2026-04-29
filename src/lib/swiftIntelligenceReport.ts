@@ -25,6 +25,8 @@ export async function generateSwiftIntelligenceReport(
   storage: { saved: boolean; runId?: string; error?: string };
   emailStatus?: string;
   emailMessageId?: string;
+  triageUsed: boolean;
+  gmailIntelDiagnostics?: IntelligenceReport["gmailIntelDiagnostics"];
 }> {
   const { sendEmail = false, source } = options;
 
@@ -100,6 +102,7 @@ export async function generateSwiftIntelligenceReport(
     storage,
     emailStatus,
     emailMessageId,
+    triageUsed: report.triageUsed === true || report.aiTriageUsed === true,
+    gmailIntelDiagnostics: report.gmailIntelDiagnostics,
   };
 }
-

@@ -1,6 +1,5 @@
 import { jsonResponseNoStore } from "@/lib/httpNoStore";
-import { runReportAndSendEmail } from "@/lib/reportRunner";
-import { normalizeDashboardReport } from "@/lib/dashboardReportMapper";
+import { generateSwiftIntelligenceReport } from "@/lib/swiftIntelligenceReport";
 
 export const dynamic = "force-dynamic";
 
@@ -18,27 +17,27 @@ export async function POST(request: Request) {
     return jsonResponseNoStore({ status: "error", message: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await runReportAndSendEmail({ runType: "manual" });
-
-  if (result.status !== "ok") {
+  try {
+    const result = await generateSwiftIntelligenceReport({ source: "manual", sendEmail: true });
+    return jsonResponseNoStore({
+      status: "ok",
+      ok: true,
+      message: "Manual report generated and email attempted successfully.",
+      storage: result.storage,
+      report: result.dashboardReport,
+      rawReport: result.report,
+      emailStatus: result.emailStatus,
+      emailMessageId: result.emailMessageId,
+      triageUsed: result.triageUsed,
+      gmailIntelDiagnostics: result.gmailIntelDiagnostics ?? null,
+    });
+  } catch (error) {
     return jsonResponseNoStore(
-      { status: "error", message: `Manual send failed: ${result.message}` },
+      {
+        status: "error",
+        message: `Manual send failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      },
       { status: 500 },
     );
   }
-
-  return jsonResponseNoStore({
-    status: "ok",
-    ok: true,
-    message: "Manual report generated and email sent successfully.",
-    emailResult: result.emailResult,
-    storage: result.storage,
-    report: normalizeDashboardReport({ report: result.report }) ?? normalizeDashboardReport({ rawReport: result.report }),
-    rawReport: result.report,
-    liveJobs: result.liveJobs,
-    liveJobsTotalDeduped: result.liveJobsTotalDeduped,
-    liveJobsHasMore: result.liveJobsHasMore,
-    diagnostics: result.diagnostics,
-  });
 }
-

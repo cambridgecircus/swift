@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import InfoCard from "@/components/InfoCard";
 import LearningAssetCard from "@/components/LearningAssetCard";
@@ -17,9 +17,6 @@ import { swiftPrimaryJobSearchProfile } from "@/lib/jobSearchProfiles";
 import type { LiveJobIngestionResponse } from "@/lib/jobIngestion";
 import { sourceRegistry } from "@/lib/sourceRegistry";
 import {
-  dedupeAndSortLiveJobs,
-  mapCtxJobRecordToWeeklyLiveJob,
-  mapDbJobRowToWeeklyLiveJob,
   type WeeklySummaryLiveJob,
   type WeeklySummaryResult,
 } from "@/lib/intelligenceStorage";
@@ -29,7 +26,7 @@ import {
   LINKEDIN_PLACEHOLDER_LOCATION,
   LINKEDIN_PLACEHOLDER_ROLE,
 } from "@/lib/linkedinJobAlertIngestion";
-import { runDiagnosticsFingerprint, type RunDiagnostics } from "@/lib/runDiagnostics";
+import type { RunDiagnostics } from "@/lib/runDiagnostics";
 import type { LiveLearningAsset, LiveSkillToPickUp, LiveSkillsAndLearningResult } from "@/lib/skillsAndLearning";
 import { normalizeDashboardReport, type DashboardReport } from "@/lib/dashboardReportMapper";
 
@@ -104,52 +101,6 @@ function safeVisibleTitle(input: string, fallback: string, maxChars = 120): stri
   if (!t) return fallback;
   if (looksLikeQueryOrDiagnostics(t)) return fallback;
   return clampText(t, maxChars);
-}
-
-function urlToDomainLabel(url: string): string | null {
-  try {
-    const u = new URL(url);
-    return u.hostname.replace(/^www\./i, "");
-  } catch {
-    return null;
-  }
-}
-
-function jobDisplayFallbackRole(role: string): string {
-  const t = (role ?? "").trim();
-  if (!t) return "LinkedIn Job Alert — Needs Review";
-  if (looksLikeQueryOrDiagnostics(t)) return "LinkedIn Job Alert — Needs Review";
-  return t;
-}
-
-function jobDisplayFallbackCompany(company: string): string {
-  const t = (company ?? "").trim();
-  if (!t) return "Company to verify";
-  if (looksLikeQueryOrDiagnostics(t)) return "Company to verify";
-  return t;
-}
-
-function jobDisplayFallbackLocation(location: string): string {
-  const t = (location ?? "").trim();
-  if (!t) return "Location to verify";
-  if (looksLikeQueryOrDiagnostics(t)) return "Location to verify";
-  return t;
-}
-
-function dedupeForSnapshot<T>(
-  rows: T[],
-  keyFn: (row: T) => string,
-): T[] {
-  const out: T[] = [];
-  const seen = new Set<string>();
-  for (const r of rows) {
-    const key = keyFn(r);
-    if (!key) continue;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(r);
-  }
-  return out;
 }
 
 // Brief mapping is centralised in `dashboardReportMapper`.
@@ -600,8 +551,23 @@ export default function Home() {
     generatedAt: string | null;
     keySignals?: KeySignalPreview[];
   };
+  type GmailIntelDiagnostics = {
+    status?: string;
+    rawItemCount?: number;
+    curatedKeepCount?: number;
+    itemsSentToAI?: number;
+    signalsCount?: number;
+    qualifiedSignalCount?: number;
+  };
+  type LatestReportStatus = {
+    storageConfigured: boolean;
+    hasLatestRun: boolean;
+    triageUsed: boolean;
+    gmailIntelDiagnostics: GmailIntelDiagnostics | null;
+  };
   const [reportPreview, setReportPreview] = useState<ReportPreview | null>(null);
   const [dashboardReport, setDashboardReport] = useState<DashboardReport | null>(null);
+  const [latestReportStatus, setLatestReportStatus] = useState<LatestReportStatus | null>(null);
   const [previewSummaryOpen, setPreviewSummaryOpen] = useState(false);
 
   const [liveJobsPayload, setLiveJobsPayload] = useState<LiveJobIngestionResponse | null>(null);
@@ -649,14 +615,11 @@ export default function Home() {
   const [skillsLearning, setSkillsLearning] = useState<LiveSkillsAndLearningResult | null>(null);
   const [skillsLearningLoading, setSkillsLearningLoading] = useState(false);
 
-  const [manualSecretInput, setManualSecretInput] = useState("");
-  const [manualSecretSaved, setManualSecretSaved] = useState(false);
   const [manualSending, setManualSending] = useState(false);
   const [manualPhase, setManualPhase] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [manualGenerateError, setManualGenerateError] = useState<string | null>(null);
   const [lastRunDiagnostics, setLastRunDiagnostics] = useState<RunDiagnostics | null>(null);
   const [stableCountsNotice, setStableCountsNotice] = useState(false);
-  const lastDiagnosticsFingerprintRef = useRef<string | null>(null);
 
   const activeSectionLabel = useMemo(() => {
     const item = navItems.find((n) => n.key === active);
@@ -685,18 +648,6 @@ export default function Home() {
     }));
 
     return { total, enabled, rssEnabled, planned, grouped };
-  }, []);
-
-  useEffect(() => {
-    // Client-only convenience: secret is never hardcoded in the app.
-    void (async () => {
-      try {
-        const saved = localStorage.getItem("swift_manual_report_secret");
-        setManualSecretSaved(Boolean(saved && saved.trim()));
-      } catch {
-        setManualSecretSaved(false);
-      }
-    })();
   }, []);
 
   useEffect(() => {
@@ -817,7 +768,22 @@ export default function Home() {
     try {
       const latestRes = await fetch("/api/debug/latest-dashboard-report", { cache: "no-store" });
       if (!latestRes.ok) return;
-      const d = (await latestRes.json()) as { reportJsonKeys?: string[] } & Record<string, unknown>;
+      const d = (await latestRes.json()) as {
+        reportJsonKeys?: string[];
+        storageConfigured?: boolean;
+        hasLatestRun?: boolean;
+        triageUsed?: boolean;
+        gmailIntelDiagnostics?: GmailIntelDiagnostics | null;
+      } & Record<string, unknown>;
+      setLatestReportStatus({
+        storageConfigured: d.storageConfigured === true,
+        hasLatestRun: d.hasLatestRun === true,
+        triageUsed: d.triageUsed === true,
+        gmailIntelDiagnostics:
+          d.gmailIntelDiagnostics && typeof d.gmailIntelDiagnostics === "object"
+            ? d.gmailIntelDiagnostics
+            : null,
+      });
       // This endpoint derives from the saved run; normalize from its payload if possible.
       const rep = normalizeDashboardReport(d);
       if (rep) {
@@ -859,32 +825,6 @@ export default function Home() {
 
   const insetCard = `${dt.nestedPanel} p-4 sm:p-5`;
   const [strongSignalOpenIdx, setStrongSignalOpenIdx] = useState<number | null>(0);
-  const liveJobWhyMap = useMemo(() => {
-    const out = new Map<string, { whyThisFits?: string; source?: string; sourceUrl?: string }>();
-    for (const o of liveJobsPayload?.opportunities ?? []) {
-      const role = typeof o.role === "string" ? o.role.trim() : "";
-      const company = typeof o.company === "string" ? o.company.trim() : "";
-      if (!role || !company) continue;
-      const key = `${role.toLowerCase()}|${company.toLowerCase()}`;
-      out.set(key, {
-        whyThisFits: typeof o.whyThisFits === "string" ? o.whyThisFits : undefined,
-        source: typeof o.source === "string" ? o.source : undefined,
-        sourceUrl: typeof o.sourceUrl === "string" ? o.sourceUrl : undefined,
-      });
-    }
-    return out;
-  }, [liveJobsPayload?.opportunities]);
-
-  const lookupWhyThisFits = useCallback(
-    (j: WeeklySummaryLiveJob) => {
-      const role = (j.role ?? "").trim();
-      const company = (j.company ?? "").trim();
-      if (!role || !company) return undefined;
-      const key = `${role.toLowerCase()}|${company.toLowerCase()}`;
-      return liveJobWhyMap.get(key)?.whyThisFits;
-    },
-    [liveJobWhyMap],
-  );
 
   type StrongSignalCard = {
     title: string;
@@ -938,10 +878,17 @@ export default function Home() {
       return {
         title: web3AiBrief.title,
         headline: rep.headline || web3AiBrief.headline,
-        signals: rep.signals.length > 0 ? rep.signals : web3AiBrief.signals,
+        signals: rep.signals.length > 0 ? rep.signals : [],
       };
     }
-    return web3AiBrief;
+    return {
+      title: web3AiBrief.title,
+      headline: "No live SWIFT Intel run is loaded.",
+      signals: [
+        "SWIFT expects Gmail SWIFT Intel to be ingested, triaged by AI, saved, then displayed here.",
+        "This view has no saved live run available, so real-time signals are not being shown.",
+      ],
+    };
   }, [dashboardReport]);
 
   const hrbpBriefToShow = useMemo(() => {
@@ -950,10 +897,17 @@ export default function Home() {
       return {
         title: hrbpBrief.title,
         headline: rep.headline || hrbpBrief.headline,
-        signals: rep.signals.length > 0 ? rep.signals : hrbpBrief.signals,
+        signals: rep.signals.length > 0 ? rep.signals : [],
       };
     }
-    return hrbpBrief;
+    return {
+      title: hrbpBrief.title,
+      headline: "No AI-triaged HRBP brief is loaded.",
+      signals: [
+        "Run generation in an environment with Gmail, AI, and storage configured to populate this card.",
+        "Until a saved run exists, this dashboard should not be treated as live intelligence.",
+      ],
+    };
   }, [dashboardReport]);
 
   async function generateLatestReport() {
@@ -995,6 +949,8 @@ export default function Home() {
         report?: unknown;
         rawReport?: unknown;
         storage?: { saved?: boolean; error?: string; runId?: string };
+        triageUsed?: boolean;
+        gmailIntelDiagnostics?: GmailIntelDiagnostics | null;
       };
 
       if (!res.ok || body.ok === false) {
@@ -1018,6 +974,15 @@ export default function Home() {
 
       setDashboardReport(rep);
       setLastRefreshedAt(new Date(rep.generatedAt));
+      setLatestReportStatus({
+        storageConfigured: true,
+        hasLatestRun: true,
+        triageUsed: body.triageUsed === true,
+        gmailIntelDiagnostics:
+          body.gmailIntelDiagnostics && typeof body.gmailIntelDiagnostics === "object"
+            ? body.gmailIntelDiagnostics
+            : null,
+      });
 
       setManualPhase("success");
       console.info("[DASHBOARD] manual generate success generatedAt=" + rep.generatedAt);
@@ -1036,20 +1001,6 @@ export default function Home() {
     } finally {
       setManualSending(false);
     }
-  }
-
-  function resetManualSecret() {
-    try {
-      localStorage.removeItem("swift_manual_report_secret");
-    } catch {
-      // ignore
-    }
-    setManualSecretSaved(false);
-    setManualSecretInput("");
-    setManualPhase("idle");
-    setLastRunDiagnostics(null);
-    setStableCountsNotice(false);
-    lastDiagnosticsFingerprintRef.current = null;
   }
 
   const manualButtonLabel =
@@ -1131,41 +1082,37 @@ export default function Home() {
                     >
                       {manualButtonLabel}
                     </button>
-                    {!manualSecretSaved ? (
-                      <div
-                        className={`${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[color:rgba(11,13,24,0.65)] p-3`}
-                      >
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Manual send secret
-                        </p>
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="password"
-                            value={manualSecretInput}
-                            onChange={(e) => setManualSecretInput(e.target.value)}
-                            placeholder="Enter secret once"
-                            autoComplete="off"
-                            className={`${dt.cardRadius} w-full border border-[color:var(--swift-border-subtle)] bg-[color:rgba(5,5,7,0.55)] px-3 py-2 text-sm ${dt.textPrimary} placeholder:text-[color:var(--swift-text-secondary)]/50`}
-                          />
-                        </div>
-                        <p className={`mt-2 text-xs ${dt.muted}`}>
-                          Stored in this browser only (<code className="text-slate-400">swift_manual_report_secret</code>
-                          ).
-                        </p>
-                      </div>
-                    ) : null}
-                    {manualSecretSaved ? (
-                      <button
-                        type="button"
-                        onClick={resetManualSecret}
-                        className={dt.resetMuted}
-                      >
-                        Reset secret
-                      </button>
-                    ) : null}
                   </div>
                 }
               />
+
+              {latestReportStatus && (!latestReportStatus.storageConfigured || !latestReportStatus.hasLatestRun) ? (
+                <div
+                  className={`${dt.cardRadius} ${dt.border} border-amber-400/25 bg-amber-950/20 px-4 py-3 sm:px-5`}
+                >
+                  <p className="text-sm font-semibold text-amber-100">
+                    Live SWIFT Intel is not available in this environment
+                  </p>
+                  <p className="mt-1 text-sm leading-relaxed text-amber-100/80">
+                    The dashboard is waiting for a saved run from the Gmail SWIFT Intel → AI triage → report
+                    pipeline. Current status: storage{" "}
+                    {latestReportStatus.storageConfigured ? "configured" : "not configured"}, latest run{" "}
+                    {latestReportStatus.hasLatestRun ? "found" : "not found"}.
+                  </p>
+                </div>
+              ) : latestReportStatus ? (
+                <div
+                  className={`${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[color:rgba(11,13,24,0.65)] px-4 py-3 sm:px-5`}
+                >
+                  <p className="text-sm font-semibold text-slate-100">Live SWIFT Intel loaded</p>
+                  <p className={`mt-1 text-xs ${dt.muted}`}>
+                    Gmail Intel: {latestReportStatus.gmailIntelDiagnostics?.status ?? "unknown"} · sent to AI:{" "}
+                    {latestReportStatus.gmailIntelDiagnostics?.itemsSentToAI ?? 0} · qualified:{" "}
+                    {latestReportStatus.gmailIntelDiagnostics?.qualifiedSignalCount ?? 0} · triage used:{" "}
+                    {latestReportStatus.triageUsed ? "yes" : "no"}
+                  </p>
+                </div>
+              ) : null}
 
               {manualPhase === "success" && lastRunDiagnostics ? (
                 <div

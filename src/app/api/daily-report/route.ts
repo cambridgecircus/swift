@@ -26,5 +26,7 @@ export async function GET(request: Request) {
     storage: result.storage,
     emailStatus: result.emailStatus,
     emailMessageId: result.emailMessageId,
+    triageUsed: result.triageUsed,
+    gmailIntelDiagnostics: result.gmailIntelDiagnostics ?? null,
   });
 }

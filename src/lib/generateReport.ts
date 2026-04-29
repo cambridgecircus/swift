@@ -90,8 +90,17 @@ export type IntelligenceReport = {
   aiSignalsCount?: number;
   aiProvider?: string;
   aiTriageUsed?: boolean;
+  triageUsed?: boolean;
   aiTriageQualifiedCount?: number;
   finalAIReportUsed?: boolean;
+  gmailIntelDiagnostics?: {
+    status: "ok" | "missing_env" | "failed" | "skipped";
+    rawItemCount?: number;
+    curatedKeepCount: number;
+    itemsSentToAI: number;
+    signalsCount: number;
+    qualifiedSignalCount?: number;
+  };
   keySignals: KeySignal[];
   hrbpRecommendations: string[];
   thisWeekPattern?: string;
@@ -505,9 +514,20 @@ export async function generateReport(options?: {
     return { ...s, tags: nextTags, sourceName: nextSourceName };
   });
 
+  const gmailIntelRawItemCount = dm?.deterministicCandidateCount ?? undefined;
+  const gmailIntelCuratedKeepCount = dm ? Object.values(dm.articlesBySection).flat().filter((a) => a.keep).length : 0;
+  const buildGmailIntelDiagnostics = (qualifiedSignalCount?: number): NonNullable<IntelligenceReport["gmailIntelDiagnostics"]> => ({
+    status: gmailIntelStatus,
+    rawItemCount: gmailIntelRawItemCount,
+    curatedKeepCount: gmailIntelCuratedKeepCount,
+    itemsSentToAI: gmailIntelSignals.length,
+    signalsCount: gmailIntelSignals.length,
+    qualifiedSignalCount,
+  });
+
   console.info("[generate_report] gmail intel curation", {
-    gmailCandidates: dm?.deterministicCandidateCount ?? 0,
-    curatedKeepCount: dm ? Object.values(dm.articlesBySection).flat().filter((a) => a.keep).length : 0,
+    gmailCandidates: gmailIntelRawItemCount ?? 0,
+    curatedKeepCount: gmailIntelCuratedKeepCount,
     sentToAI: gmailIntelSignals.length,
   });
 
@@ -713,10 +733,11 @@ export async function generateReport(options?: {
         return {
           ...mapped,
           gmailIntelStatus,
-          gmailIntelRawItemCount: dm?.deterministicCandidateCount ?? undefined,
+          gmailIntelRawItemCount,
           gmailIntelItemsSentToAI: gmailIntelSignals.length,
           gmailIntelSignalsCount: gmailIntelSignals.length,
           gmailIntelQualifiedSignalCount: gmailIntelQualified,
+          gmailIntelDiagnostics: buildGmailIntelDiagnostics(gmailIntelQualified),
           rssRawItemCount: rssSignals.length,
           rssItemsSentToAI: rssSignals.length,
           rssSignalsCount: rssSignals.length,
@@ -724,6 +745,7 @@ export async function generateReport(options?: {
           aiSignalsCount: qualifiedSignals.length,
           aiProvider: "deepseek",
           aiTriageUsed: triageUsed,
+          triageUsed,
           aiTriageQualifiedCount: qualifiedSignals.length,
           finalAIReportUsed: true,
           liveJobOpportunities: [...gmailLinkedInRows, ...(mapped.liveJobOpportunities ?? [])].slice(0, 12),
@@ -744,10 +766,11 @@ export async function generateReport(options?: {
       return {
         ...detFromQualified,
         gmailIntelStatus,
-        gmailIntelRawItemCount: dm?.deterministicCandidateCount ?? undefined,
+        gmailIntelRawItemCount,
         gmailIntelItemsSentToAI: gmailIntelSignals.length,
         gmailIntelSignalsCount: gmailIntelSignals.length,
         gmailIntelQualifiedSignalCount: gmailIntelQualified,
+        gmailIntelDiagnostics: buildGmailIntelDiagnostics(gmailIntelQualified),
         rssRawItemCount: rssSignals.length,
         rssItemsSentToAI: rssSignals.length,
         rssSignalsCount: rssSignals.length,
@@ -755,6 +778,7 @@ export async function generateReport(options?: {
         aiSignalsCount: qualifiedSignals.length,
         aiProvider: "deterministic",
         aiTriageUsed: triageUsed,
+        triageUsed,
         aiTriageQualifiedCount: qualifiedSignals.length,
         finalAIReportUsed: false,
       };
@@ -771,16 +795,18 @@ export async function generateReport(options?: {
     return {
       ...det,
       gmailIntelStatus,
-      gmailIntelRawItemCount: dm?.deterministicCandidateCount ?? undefined,
+      gmailIntelRawItemCount,
       gmailIntelItemsSentToAI: gmailIntelSignals.length,
       gmailIntelSignalsCount: gmailIntelSignals.length,
       gmailIntelQualifiedSignalCount: gmailIntelSignals.length,
+      gmailIntelDiagnostics: buildGmailIntelDiagnostics(gmailIntelSignals.length),
       rssRawItemCount: rssSignals.length,
       rssItemsSentToAI: rssSignals.length,
       rssSignalsCount: rssSignals.length,
       aiSignalsCount: mergedSignals.length,
       aiProvider: "deterministic",
       aiTriageUsed: false,
+      triageUsed: false,
       finalAIReportUsed: false,
     };
   }

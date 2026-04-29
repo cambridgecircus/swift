@@ -1,8 +1,6 @@
 import { Resend } from "resend";
 import type { IntelligenceReport } from "@/lib/generateReport";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 function esc(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -296,6 +294,7 @@ export async function sendReportEmail(report: IntelligenceReport) {
     throw new Error("Missing REPORT_RECIPIENT_EMAIL or REPORT_FROM_EMAIL");
   }
 
+  const resend = new Resend(process.env.RESEND_API_KEY);
   const result = await resend.emails.send({
     from,
     to: recipient,

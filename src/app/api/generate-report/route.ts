@@ -8,5 +8,7 @@ export async function POST() {
     report: res.dashboardReport,
     rawReport: res.report,
     storage: res.storage,
+    triageUsed: res.triageUsed,
+    gmailIntelDiagnostics: res.gmailIntelDiagnostics ?? null,
   });
 }

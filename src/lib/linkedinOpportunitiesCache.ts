@@ -7,6 +7,10 @@ type LinkedInCacheState = {
   updatedAtMs: number;
 };
 
+type ErrorWithLinkedInDiagnostics = Error & {
+  imapDiagnostics?: LinkedInImapDiagnostics;
+};
+
 type CacheReason = "cache_hit" | "cache_miss" | "cache_expired";
 
 export type LinkedInCacheMeta = {
@@ -102,7 +106,10 @@ export async function getLinkedInJobEmailsCached(options?: {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Manual refresh failed";
-      const diag = (error as any)?.imapDiagnostics as LinkedInImapDiagnostics | undefined;
+      const diag =
+        error instanceof Error
+          ? (error as ErrorWithLinkedInDiagnostics).imapDiagnostics
+          : undefined;
       if (diag) {
         console.error("[LINKEDIN_CACHE] manual refresh failed diagnostics", diag);
       } else {

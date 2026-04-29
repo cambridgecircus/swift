@@ -36,6 +36,31 @@ export type LinkedInImapDiagnostics = {
   };
 };
 
+type ErrorWithImapDiagnostics = Error & {
+  imapDiagnostics?: LinkedInImapDiagnostics;
+};
+
+type ImapErrorLike = {
+  name?: unknown;
+  message?: unknown;
+  stack?: unknown;
+  response?: unknown;
+  responseStatus?: unknown;
+  serverResponseCode?: unknown;
+  executedCommand?: unknown;
+  responseText?: unknown;
+  authenticationFailed?: unknown;
+  code?: unknown;
+  errno?: unknown;
+  syscall?: unknown;
+  hostname?: unknown;
+  command?: unknown;
+  imap?: {
+    hostname?: unknown;
+    command?: unknown;
+  };
+};
+
 function firstThreeStackLines(stack: unknown): string | undefined {
   if (!stack) return undefined;
   const s = String(stack);
@@ -50,26 +75,46 @@ function buildImapDiagnostics(args: {
   label: string;
   imapHost: string;
 }): LinkedInImapDiagnostics {
-  const anyErr = args.error as any;
+  const anyErr = args.error && typeof args.error === "object" ? (args.error as ImapErrorLike) : {};
+  const responseObj =
+    anyErr.response && typeof anyErr.response === "object"
+      ? (anyErr.response as { text?: unknown })
+      : {};
   const missingUser = !process.env.GMAIL_USER || !String(process.env.GMAIL_USER).trim();
   const missingPass = !process.env.GMAIL_APP_PASSWORD || !String(process.env.GMAIL_APP_PASSWORD).trim();
 
   const diag: LinkedInImapDiagnostics = {
     stage: args.stage,
-    errorName: anyErr?.name,
-    errorMessage: anyErr?.message ? String(anyErr.message) : String(args.error),
+    errorName: typeof anyErr.name === "string" ? anyErr.name : undefined,
+    errorMessage: anyErr.message ? String(anyErr.message) : String(args.error),
     errorStack: firstThreeStackLines(anyErr?.stack),
     response: anyErr?.response,
     responseStatus: anyErr?.responseStatus,
     serverResponseCode: anyErr?.serverResponseCode,
-    executedCommand: anyErr?.executedCommand,
-    responseText: anyErr?.responseText ?? anyErr?.response?.text,
-    authenticationFailed: anyErr?.authenticationFailed,
+    executedCommand: typeof anyErr.executedCommand === "string" ? anyErr.executedCommand : undefined,
+    responseText:
+      anyErr.responseText != null
+        ? String(anyErr.responseText)
+        : responseObj.text != null
+          ? String(responseObj.text)
+          : undefined,
+    authenticationFailed:
+      typeof anyErr.authenticationFailed === "boolean" ? anyErr.authenticationFailed : undefined,
     code: anyErr?.code,
     errno: anyErr?.errno,
     syscall: anyErr?.syscall,
-    hostname: anyErr?.hostname ?? anyErr?.imap?.hostname,
-    command: anyErr?.command ?? anyErr?.imap?.command,
+    hostname:
+      typeof anyErr.hostname === "string"
+        ? anyErr.hostname
+        : typeof anyErr.imap?.hostname === "string"
+          ? anyErr.imap.hostname
+          : undefined,
+    command:
+      typeof anyErr.command === "string"
+        ? anyErr.command
+        : typeof anyErr.imap?.command === "string"
+          ? anyErr.imap.command
+          : undefined,
     mailbox: args.label,
     imapHost: args.imapHost,
     envPresent: {
@@ -227,8 +272,8 @@ export async function fetchLinkedInJobAlertEmails(options?: {
             label,
             imapHost,
           });
-          const err = new Error("Missing required Gmail env vars");
-          (err as any).imapDiagnostics = diag;
+          const err: ErrorWithImapDiagnostics = new Error("Missing required Gmail env vars");
+          err.imapDiagnostics = diag;
           throw err;
     }
     return [];
@@ -330,15 +375,17 @@ export async function fetchLinkedInJobAlertEmails(options?: {
         });
         console.error("[GMAIL_LINKEDIN] IMAP fetch failed", { stage: diag.stage, errorMessage: diag.errorMessage });
         if (options?.throwOnError) {
-          const err = error instanceof Error ? error : new Error(diag.errorMessage ?? "Command failed");
-          (err as any).imapDiagnostics = diag;
+          const err: ErrorWithImapDiagnostics =
+            error instanceof Error ? error : new Error(diag.errorMessage ?? "Command failed");
+          err.imapDiagnostics = diag;
           throw err;
         }
     return [];
   } finally {
-    if (mailboxLock) {
+    const lock = mailboxLock as { release: () => void } | null;
+    if (lock) {
       try {
-        (mailboxLock as any).release();
+        lock.release();
       } catch {
         // ignore lock release errors
       }
@@ -357,8 +404,8 @@ export async function fetchLinkedInJobAlertEmails(options?: {
               label,
               imapHost,
             });
-            const err = new Error(diag.errorMessage ?? "IMAP logout failed");
-            (err as any).imapDiagnostics = diag;
+            const err: ErrorWithImapDiagnostics = new Error(diag.errorMessage ?? "IMAP logout failed");
+            err.imapDiagnostics = diag;
             throw err;
           }
     }

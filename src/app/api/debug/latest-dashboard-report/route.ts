@@ -42,6 +42,13 @@ export async function GET() {
             }
           })()
         : null;
+  const rawReportObj = rawReport && typeof rawReport === "object" ? (rawReport as Record<string, unknown>) : null;
+  const triageUsed =
+    rawReportObj?.triageUsed === true || rawReportObj?.aiTriageUsed === true;
+  const gmailIntelDiagnostics =
+    rawReportObj && typeof rawReportObj.gmailIntelDiagnostics === "object"
+      ? rawReportObj.gmailIntelDiagnostics
+      : null;
 
   return jsonResponseNoStore({
     ok: true,
@@ -62,6 +69,8 @@ export async function GET() {
     reportHasRawJson,
     reportJsonKeys,
     moduleSources,
+    triageUsed,
+    gmailIntelDiagnostics,
     modules: {
       web3AiBrief: {
         exists: Boolean(report?.web3AiBrief),
@@ -99,4 +108,3 @@ export async function GET() {
     },
   });
 }
-
