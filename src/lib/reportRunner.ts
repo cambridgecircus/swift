@@ -53,8 +53,19 @@ export async function runReportAndSendEmail(input: {
   diagnostics?: RunDiagnostics;
 }> {
   try {
+    console.info(`[report_runner] run started runType=${input.runType}`);
     const ctx = await gatherReportStorageContext();
     const ingestionCompletedAt = new Date().toISOString();
+    console.info(
+      "[report_runner] collected storage context",
+      JSON.stringify({
+        rawSignalCount: ctx.rawSignalCount,
+        cleanSignalCount: ctx.cleanSignalCount,
+        marketSignals: ctx.marketSignals.length,
+        jobOpportunities: ctx.jobOpportunities.length,
+        sourceHealth: ctx.sourceHealth.length,
+      }),
+    );
 
     const report = await generateReport({ storageContext: ctx });
     const emailResult = await sendReportEmail(report);

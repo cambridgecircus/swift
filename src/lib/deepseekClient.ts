@@ -1,4 +1,5 @@
 import { aiReportContractPrompt } from "@/lib/aiReportContractPrompt";
+import { aiSignalTriagePrompt } from "@/lib/aiSignalTriagePrompt";
 import {
   buildExpansionVsDownsizingTrend,
   extractDownsizingSnippets,
@@ -22,6 +23,7 @@ const DEEPSEEK_CHAT_PATH = "/chat/completions";
 const MODEL_PRIMARY = "deepseek-v4-flash";
 const MODEL_FALLBACK = "deepseek-chat";
 const PREVIEW_LEN = 500;
+const REQUEST_TIMEOUT_MS = 85_000;
 
 const APPLICATION_STATUSES: ApplicationStatus[] = [
   "To Review",
@@ -61,6 +63,22 @@ export type DeepSeekInvokeDiagnostics = {
 
 export type DeepSeekReportResult =
   | { ok: true; contract: AIReportContract; diagnostics: DeepSeekInvokeDiagnostics }
+  | { ok: false; diagnostics: DeepSeekInvokeDiagnostics };
+
+export type AISignalTriageItem = {
+  id: string;
+  isQualifiedSignal: boolean;
+  includeInCards: boolean;
+  confidence: "high" | "medium" | "low";
+  categories: string[];
+  strategicRelevance: number;
+  hrbpImplication: string;
+  excludeReason: string;
+  dashboardCard: "web3AiBrief" | "hrbpBrief" | "employmentLaw" | "expansionDownsizing";
+};
+
+export type DeepSeekTriageResult =
+  | { ok: true; triage: { generatedAt: string; items: AISignalTriageItem[] }; diagnostics: DeepSeekInvokeDiagnostics }
   | { ok: false; diagnostics: DeepSeekInvokeDiagnostics };
 
 export function isDeepSeekConfigured(): boolean {
@@ -720,33 +738,91 @@ async function callDeepSeekModel(params: {
       ...(jsonObject ? { response_format: { type: "json_object" } } : {}),
     });
 
-  let res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
-    },
-    body: buildBody(true),
-    cache: "no-store",
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
 
-  let bodyText = await res.text();
-
-  if (
-    !res.ok &&
-    res.status === 400 &&
-    /response_format|json_object/i.test(bodyText)
-  ) {
+  let res: Response;
+  try {
     res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${params.apiKey}`,
       },
-      body: buildBody(false),
+      body: buildBody(true),
       cache: "no-store",
+      signal: controller.signal,
     });
+  } catch (e) {
+    clearTimeout(timeout);
+    const isTimeout =
+      (e instanceof DOMException && e.name === "AbortError") ||
+      (e instanceof Error && e.name === "AbortError");
+    if (isTimeout) {
+      console.warn("[deepseek] request timed out");
+      return {
+        httpStatus: 0,
+        bodyText: "",
+        assistantContent: null,
+        apiErrorMessage: "Request timed out",
+      };
+    }
+    return {
+      httpStatus: 0,
+      bodyText: "",
+      assistantContent: null,
+      apiErrorMessage: e instanceof Error ? e.message : "Request failed",
+    };
+  }
+
+  let bodyText: string;
+  try {
     bodyText = await res.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (
+    !res.ok &&
+    res.status === 400 &&
+    /response_format|json_object/i.test(bodyText)
+  ) {
+    const controller2 = new AbortController();
+    const timeout2 = setTimeout(() => controller2.abort("timeout"), REQUEST_TIMEOUT_MS);
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: buildBody(false),
+        cache: "no-store",
+        signal: controller2.signal,
+      });
+      bodyText = await res.text();
+    } catch (e) {
+      const isTimeout =
+        (e instanceof DOMException && e.name === "AbortError") ||
+        (e instanceof Error && e.name === "AbortError");
+      if (isTimeout) {
+        console.warn("[deepseek] request timed out");
+        return {
+          httpStatus: 0,
+          bodyText: "",
+          assistantContent: null,
+          apiErrorMessage: "Request timed out",
+        };
+      }
+      return {
+        httpStatus: 0,
+        bodyText: "",
+        assistantContent: null,
+        apiErrorMessage: e instanceof Error ? e.message : "Request failed",
+      };
+    } finally {
+      clearTimeout(timeout2);
+    }
   }
 
   let assistantContent: string | null = null;
@@ -933,4 +1009,189 @@ export async function generateDeepSeekReport(input: {
 }): Promise<AIReportContract | null> {
   const result = await generateDeepSeekReportResult(input);
   return result.ok ? result.contract : null;
+}
+
+function isTriageItem(v: unknown): v is AISignalTriageItem {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  const conf = o.confidence;
+  const dc = o.dashboardCard;
+  const dashOk =
+    dc === "web3AiBrief" ||
+    dc === "hrbpBrief" ||
+    dc === "employmentLaw" ||
+    dc === "expansionDownsizing";
+  return (
+    typeof o.id === "string" &&
+    typeof o.isQualifiedSignal === "boolean" &&
+    typeof o.includeInCards === "boolean" &&
+    (conf === "high" || conf === "medium" || conf === "low") &&
+    Array.isArray(o.categories) &&
+    o.categories.every((c) => typeof c === "string") &&
+    typeof o.strategicRelevance === "number" &&
+    typeof o.hrbpImplication === "string" &&
+    typeof o.excludeReason === "string" &&
+    dashOk
+  );
+}
+
+export async function triageSignalsWithDeepSeekResult(input: {
+  cleanedSignals: CleanMarketSignal[];
+  generatedAt: string;
+}): Promise<DeepSeekTriageResult> {
+  const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
+  const baseDiag = emptyDiagnostics();
+
+  if (!apiKey || !input.cleanedSignals.length) {
+    return {
+      ok: false,
+      diagnostics: {
+        ...baseDiag,
+        apiStatus: null,
+        rawResponsePreview: "",
+        apiErrorMessage: !apiKey ? "Missing API key" : "No cleaned signals",
+      },
+    };
+  }
+
+  const userPayload = {
+    generatedAt: input.generatedAt,
+    cleanedSignals: input.cleanedSignals,
+  };
+
+  const userContent = `${aiSignalTriagePrompt}
+
+Input JSON (ground truth):
+${JSON.stringify(userPayload)}`;
+
+  const system = "You return only valid JSON matching the user schema. No markdown. No prose outside JSON.";
+
+  const models = [MODEL_PRIMARY, MODEL_FALLBACK];
+  let lastHttpStatus: number | null = null;
+  let lastApiError: string | undefined;
+  let lastBodyText = "";
+  let lastAssistant = "";
+  let lastHttpOkAssistant = "";
+
+  for (const model of models) {
+    baseDiag.modelsAttempted.push(model);
+    let attempt: Awaited<ReturnType<typeof callDeepSeekModel>>;
+    try {
+      attempt = await callDeepSeekModel({
+        model,
+        apiKey,
+        system,
+        user: userContent,
+      });
+    } catch (err) {
+      lastHttpStatus = null;
+      lastApiError = err instanceof Error ? err.message : "Request failed";
+      lastBodyText = "";
+      lastAssistant = "";
+      if (model === MODEL_FALLBACK) break;
+      continue;
+    }
+
+    lastHttpStatus = attempt.httpStatus;
+    lastBodyText = attempt.bodyText;
+    lastAssistant = attempt.assistantContent ?? "";
+    if (attempt.httpStatus > 0 && attempt.httpStatus < 400 && lastAssistant) {
+      lastHttpOkAssistant = lastAssistant;
+    }
+
+    const transportFailure =
+      !attempt.httpStatus || attempt.httpStatus >= 400 || Boolean(attempt.apiErrorMessage);
+    const noContent = !attempt.assistantContent?.trim();
+    if (transportFailure || noContent) {
+      lastApiError =
+        attempt.apiErrorMessage ??
+        (noContent && attempt.httpStatus < 400 ? "Empty assistant content" : undefined) ??
+        `HTTP ${attempt.httpStatus}`;
+      if (model === MODEL_FALLBACK) break;
+      continue;
+    }
+
+    const content = attempt.assistantContent as string;
+    const parsed = parseAssistantJson(content);
+    if (parsed.parseError || parsed.value === null) {
+      lastApiError = undefined;
+      if (model === MODEL_FALLBACK) {
+        return {
+          ok: false,
+          diagnostics: {
+            apiStatus: attempt.httpStatus,
+            rawResponsePreview: preview(content),
+            parseError: parsed.parseError,
+            validationMissingFields: undefined,
+            modelsAttempted: [...baseDiag.modelsAttempted],
+          },
+        };
+      }
+      continue;
+    }
+
+    const root = parsed.value as Record<string, unknown>;
+    const items = Array.isArray(root.items) ? (root.items as unknown[]) : [];
+    const triageItems = items.filter(isTriageItem) as AISignalTriageItem[];
+    const generatedAt =
+      typeof root.generatedAt === "string" && root.generatedAt.trim()
+        ? root.generatedAt.trim()
+        : input.generatedAt;
+
+    // Validate: ids must be a UNIQUE subset of input ids.
+    const expectedIds = new Set(input.cleanedSignals.map((s) => s.id));
+    const gotIds = new Set<string>();
+    let anyUnknown = false;
+    let anyDuplicate = false;
+    for (const it of triageItems) {
+      if (gotIds.has(it.id)) anyDuplicate = true;
+      gotIds.add(it.id);
+      if (!expectedIds.has(it.id)) anyUnknown = true;
+    }
+    if (anyUnknown || anyDuplicate) {
+      const reason = anyUnknown
+        ? "items contained ids not present in input cleanedSignals"
+        : "items contained duplicate ids";
+      if (model === MODEL_FALLBACK) {
+        return {
+          ok: false,
+          diagnostics: {
+            apiStatus: attempt.httpStatus,
+            rawResponsePreview: preview(content),
+            validationMissingFields: [reason],
+            modelsAttempted: [...baseDiag.modelsAttempted],
+          },
+        };
+      }
+      continue;
+    }
+
+    return {
+      ok: true,
+      triage: { generatedAt, items: triageItems },
+      diagnostics: {
+        apiStatus: attempt.httpStatus,
+        rawResponsePreview: "",
+        modelsAttempted: [...baseDiag.modelsAttempted],
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    diagnostics: {
+      apiStatus: lastHttpStatus,
+      apiErrorMessage: lastApiError,
+      rawResponsePreview: preview(lastHttpOkAssistant || lastAssistant || lastBodyText),
+      modelsAttempted: [...baseDiag.modelsAttempted],
+    },
+  };
+}
+
+export async function triageSignalsWithDeepSeek(input: {
+  cleanedSignals: CleanMarketSignal[];
+  generatedAt: string;
+}): Promise<{ generatedAt: string; items: AISignalTriageItem[] } | null> {
+  const result = await triageSignalsWithDeepSeekResult(input);
+  return result.ok ? result.triage : null;
 }

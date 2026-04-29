@@ -47,6 +47,16 @@ export async function GET() {
     ok: true,
     storageConfigured,
     hasLatestRun: Boolean(run),
+    // Payload passthrough for the client: the UI calls `normalizeDashboardReport(d)`.
+    // Returning the normalized report keeps the dashboard cards consistent with the latest stored run.
+    report,
+    rawReport,
+    headline: typeof (run as Record<string, unknown>)?.headline === "string" ? (run as Record<string, unknown>).headline : null,
+    executive_summary:
+      typeof (run as Record<string, unknown>)?.executive_summary === "string"
+        ? (run as Record<string, unknown>).executive_summary
+        : null,
+    generated_at: typeof (run as Record<string, unknown>)?.generated_at === "string" ? (run as Record<string, unknown>).generated_at : null,
     generatedAt: report?.generatedAt ?? null,
     reportKeys: run && typeof run === "object" ? Object.keys(run as Record<string, unknown>) : [],
     reportHasRawJson,

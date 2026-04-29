@@ -8,6 +8,7 @@ import { DetailsPanel, NestedPanel, StatusBadge } from "@/components/DashboardPr
 import type { NavItem, NavKey } from "@/components/Sidebar";
 import Sidebar from "@/components/Sidebar";
 import SectionHeader from "@/components/SectionHeader";
+import SourceDropdown from "@/components/SourceDropdown";
 import { mockLearningAssets, mockOpportunities, mockSkills } from "@/lib/mockData";
 import { jobApplicationChannels, suggestedNewChannels } from "@/lib/jobSourceMemory";
 import { designTokens as dt } from "@/lib/designTokens";
@@ -77,6 +78,76 @@ function cleanTextArray(input: Array<string | null | undefined>, limit = 5): str
     seen.add(key);
     out.push(t);
     if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function clampText(input: string, maxChars: number): string {
+  const t = input.trim().replace(/\s+/g, " ");
+  if (t.length <= maxChars) return t;
+  return t.slice(0, Math.max(0, maxChars - 1)).trimEnd() + "…";
+}
+
+function looksLikeQueryOrDiagnostics(input: string): boolean {
+  const t = input.trim();
+  if (!t) return false;
+  if (/^https?:\/\//i.test(t)) return true;
+  if (/google news|news\.google\.com|rss/i.test(t) && t.length > 40) return true;
+  const opCount = (t.match(/\b(OR|AND|site:|intitle:|inurl:)\b/gi) ?? []).length;
+  if (opCount >= 2 && t.length > 50) return true;
+  if (t.includes("utm_") || t.includes("gclid=") || t.includes("fbclid=")) return true;
+  return false;
+}
+
+function safeVisibleTitle(input: string, fallback: string, maxChars = 120): string {
+  const t = (input ?? "").trim().replace(/\s+/g, " ");
+  if (!t) return fallback;
+  if (looksLikeQueryOrDiagnostics(t)) return fallback;
+  return clampText(t, maxChars);
+}
+
+function urlToDomainLabel(url: string): string | null {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace(/^www\./i, "");
+  } catch {
+    return null;
+  }
+}
+
+function jobDisplayFallbackRole(role: string): string {
+  const t = (role ?? "").trim();
+  if (!t) return "LinkedIn Job Alert — Needs Review";
+  if (looksLikeQueryOrDiagnostics(t)) return "LinkedIn Job Alert — Needs Review";
+  return t;
+}
+
+function jobDisplayFallbackCompany(company: string): string {
+  const t = (company ?? "").trim();
+  if (!t) return "Company to verify";
+  if (looksLikeQueryOrDiagnostics(t)) return "Company to verify";
+  return t;
+}
+
+function jobDisplayFallbackLocation(location: string): string {
+  const t = (location ?? "").trim();
+  if (!t) return "Location to verify";
+  if (looksLikeQueryOrDiagnostics(t)) return "Location to verify";
+  return t;
+}
+
+function dedupeForSnapshot<T>(
+  rows: T[],
+  keyFn: (row: T) => string,
+): T[] {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    const key = keyFn(r);
+    if (!key) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
   }
   return out;
 }
@@ -533,14 +604,6 @@ export default function Home() {
   const [dashboardReport, setDashboardReport] = useState<DashboardReport | null>(null);
   const [previewSummaryOpen, setPreviewSummaryOpen] = useState(false);
 
-  type ManualSnapshotJobs = {
-    jobs: WeeklySummaryLiveJob[];
-    total: number;
-    hasMore: boolean;
-  };
-  const [manualSnapshotJobs, setManualSnapshotJobs] = useState<ManualSnapshotJobs | null>(null);
-  const [latestRunLiveJobs, setLatestRunLiveJobs] = useState<WeeklySummaryLiveJob[] | null>(null);
-
   const [liveJobsPayload, setLiveJobsPayload] = useState<LiveJobIngestionResponse | null>(null);
   const [liveJobsLoading, setLiveJobsLoading] = useState(false);
   const [liveJobsError, setLiveJobsError] = useState<string | null>(null);
@@ -590,6 +653,7 @@ export default function Home() {
   const [manualSecretSaved, setManualSecretSaved] = useState(false);
   const [manualSending, setManualSending] = useState(false);
   const [manualPhase, setManualPhase] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [manualGenerateError, setManualGenerateError] = useState<string | null>(null);
   const [lastRunDiagnostics, setLastRunDiagnostics] = useState<RunDiagnostics | null>(null);
   const [stableCountsNotice, setStableCountsNotice] = useState(false);
   const lastDiagnosticsFingerprintRef = useRef<string | null>(null);
@@ -658,7 +722,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [active, lastRefreshedAt]);
+  }, [active]);
 
   useEffect(() => {
     if (active !== "skills" && active !== "learningAssets") return;
@@ -679,7 +743,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [active, lastRefreshedAt]);
+  }, [active]);
 
   const loadJobsData = useCallback(async (forceLinkedInRefresh = false) => {
     setLiveJobsLoading(true);
@@ -738,7 +802,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (active !== "dashboard" && active !== "jobOpportunities") return;
+    if (active !== "jobOpportunities") return;
     let cancelled = false;
     void (async () => {
       if (cancelled) return;
@@ -747,7 +811,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [active, lastRefreshedAt, loadJobsData]);
+  }, [active, loadJobsData]);
 
   const loadLatestReportPreview = useCallback(async () => {
     try {
@@ -758,7 +822,11 @@ export default function Home() {
       const rep = normalizeDashboardReport(d);
       if (rep) {
         setDashboardReport(rep);
-        setLastRefreshedAt(new Date(rep.generatedAt));
+        const nextTs = new Date(rep.generatedAt).getTime();
+        setLastRefreshedAt((prev) => {
+          const prevTs = prev ? prev.getTime() : null;
+          return prevTs === nextTs ? prev : new Date(nextTs);
+        });
       } else {
         setDashboardReport(null);
       }
@@ -787,70 +855,10 @@ export default function Home() {
       void loadLatestReportPreview();
     }, 0);
     return () => window.clearTimeout(t);
-  }, [active, lastRefreshedAt, loadLatestReportPreview]);
-
-  useEffect(() => {
-    if (active !== "dashboard") return;
-    let cancelled = false;
-    const tid = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const res = await fetch("/api/debug/runs", { cache: "no-store" });
-          if (!res.ok || cancelled) return;
-          const d = (await res.json()) as { runs?: Record<string, unknown>[] };
-          const id = typeof d.runs?.[0]?.id === "string" ? d.runs[0].id : null;
-          if (!id) {
-            if (!cancelled) setLatestRunLiveJobs(null);
-            return;
-          }
-          const det = await fetch(`/api/debug/runs/${encodeURIComponent(id)}`);
-          if (!det.ok || cancelled) return;
-          const dj = (await det.json()) as {
-            jobOpportunities?: Record<string, unknown>[];
-          };
-          const jobs = (dj.jobOpportunities ?? []).map(mapDbJobRowToWeeklyLiveJob);
-          if (!cancelled) setLatestRunLiveJobs(jobs.length ? jobs : null);
-        } catch {
-          if (!cancelled) setLatestRunLiveJobs(null);
-        }
-      })();
-    }, 0);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(tid);
-    };
-  }, [active, lastRefreshedAt]);
+  }, [active, loadLatestReportPreview]);
 
   const insetCard = `${dt.nestedPanel} p-4 sm:p-5`;
   const [strongSignalOpenIdx, setStrongSignalOpenIdx] = useState<number | null>(0);
-  const [jobSnapshotOpenIdx, setJobSnapshotOpenIdx] = useState<number | null>(null);
-
-  const mergedLiveJobsFull = useMemo(() => {
-    const parts: WeeklySummaryLiveJob[] = [];
-    if (manualSnapshotJobs?.jobs?.length) {
-      parts.push(...manualSnapshotJobs.jobs);
-    }
-    if (latestRunLiveJobs?.length) {
-      parts.push(...latestRunLiveJobs);
-    }
-    const weeklyJobs = weeklySummary?.liveJobs ?? [];
-    if (weeklyJobs.length > 0) {
-      parts.push(...weeklyJobs);
-    }
-    for (const o of liveJobsPayload?.opportunities ?? []) {
-      parts.push(
-        mapCtxJobRecordToWeeklyLiveJob({ ...(o as unknown as Record<string, unknown>) }),
-      );
-    }
-    return dedupeAndSortLiveJobs(parts);
-  }, [manualSnapshotJobs, latestRunLiveJobs, weeklySummary, liveJobsPayload?.opportunities]);
-
-  const mergedLiveJobsDisplay = useMemo(
-    () => mergedLiveJobsFull.slice(0, 20),
-    [mergedLiveJobsFull],
-  );
-  const mergedLiveJobsHasMore = mergedLiveJobsFull.length > 20;
-  const mergedTop3 = useMemo(() => mergedLiveJobsFull.slice(0, 3), [mergedLiveJobsFull]);
   const liveJobWhyMap = useMemo(() => {
     const out = new Map<string, { whyThisFits?: string; source?: string; sourceUrl?: string }>();
     for (const o of liveJobsPayload?.opportunities ?? []) {
@@ -948,99 +956,82 @@ export default function Home() {
     return hrbpBrief;
   }, [dashboardReport]);
 
-  async function generateAndSendLatestReport() {
+  async function generateLatestReport() {
+    console.info("[DASHBOARD] manual generate started");
     try {
-      const savedSecret = (() => {
-        try {
-          return localStorage.getItem("swift_manual_report_secret") ?? "";
-        } catch {
-          return "";
-        }
-      })();
-      const secretToUse = (savedSecret || manualSecretInput).trim();
-      if (!secretToUse) {
-        setManualPhase("error");
-        return;
-      }
-
-      if (!savedSecret && manualSecretInput.trim()) {
-        try {
-          localStorage.setItem("swift_manual_report_secret", manualSecretInput.trim());
-          setManualSecretSaved(true);
-          setManualSecretInput("");
-        } catch {
-          // ignore localStorage failures
-        }
-      }
-
       setManualSending(true);
       setManualPhase("loading");
-      const res = await fetch("/api/manual-send-report", {
-        method: "POST",
-        cache: "no-store",
-        headers: { Authorization: `Bearer ${secretToUse}` },
-      });
+      setManualGenerateError(null);
+      setLastRunDiagnostics(null);
+      setStableCountsNotice(false);
+
+      const controller = new AbortController();
+      const timeoutMs = 120_000;
+      console.info("[DASHBOARD] manual generate timeout ms=" + timeoutMs);
+      const timeout = window.setTimeout(() => {
+        try {
+          // Prefer a reason when supported; fallback to plain abort.
+          controller.abort("timeout");
+        } catch {
+          controller.abort();
+        }
+      }, timeoutMs);
+
+      let res: Response;
+      try {
+        res = await fetch("/api/generate-report", {
+          method: "POST",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
+
+      console.info("[DASHBOARD] manual generate response received status=" + res.status);
       const body = (await res.json().catch(() => ({}))) as {
-        status?: string;
-        diagnostics?: RunDiagnostics;
+        ok?: boolean;
+        generatedAt?: string;
         report?: unknown;
         rawReport?: unknown;
-        liveJobs?: WeeklySummaryLiveJob[];
-        liveJobsTotalDeduped?: number;
-        liveJobsHasMore?: boolean;
+        storage?: { saved?: boolean; error?: string; runId?: string };
       };
 
-      if (res.status === 401 || body.status === "error") {
-        setManualPhase("error");
-        setStableCountsNotice(false);
-        return;
-      }
-      if (!res.ok) {
-        setManualPhase("error");
-        setStableCountsNotice(false);
-        return;
-      }
-
-      const diag = body.diagnostics;
-      if (diag && typeof diag === "object" && typeof diag.generatedAt === "string") {
-        const fp = runDiagnosticsFingerprint(diag);
-        setStableCountsNotice(
-          lastDiagnosticsFingerprintRef.current !== null &&
-            lastDiagnosticsFingerprintRef.current === fp,
-        );
-        lastDiagnosticsFingerprintRef.current = fp;
-        setLastRunDiagnostics(diag);
-      } else {
-        setStableCountsNotice(false);
-        setLastRunDiagnostics(null);
-      }
-
-      if (Array.isArray(body.liveJobs) && body.liveJobs.length > 0) {
-        setManualSnapshotJobs({
-          jobs: body.liveJobs,
-          total:
-            typeof body.liveJobsTotalDeduped === "number"
-              ? body.liveJobsTotalDeduped
-              : body.liveJobs.length,
-          hasMore: Boolean(body.liveJobsHasMore),
-        });
+      if (!res.ok || body.ok === false) {
+        throw new Error(body?.storage?.error || "Generate report request failed");
       }
 
       const nextReport = (body.report ?? body.rawReport) as unknown;
-      const used = body.report != null ? "report" : body.rawReport != null ? "rawReport" : "none";
-      // Safe debug breadcrumb for diagnosing stale fallback rendering.
-      console.log("[dashboard] manual-send-report payload used:", used);
-
       const rep = normalizeDashboardReport({ report: nextReport });
-      if (rep) {
-        setDashboardReport(rep);
-        setLastRefreshedAt(new Date(rep.generatedAt));
+      if (!rep) {
+        throw new Error("Generate report returned an un-normalizable dashboard payload");
       }
 
-      if (!rep) setLastRefreshedAt(new Date());
+      const generatedAt = rep.generatedAt;
+      console.info("[DASHBOARD] manual generate report generatedAt=" + generatedAt);
+
+      const storageSaved = Boolean(body.storage?.saved);
+      console.info("[DASHBOARD] manual generate latest report saved saved=" + storageSaved);
+      if (!storageSaved) {
+        throw new Error(body.storage?.error || "Report generated but not saved");
+      }
+
+      setDashboardReport(rep);
+      setLastRefreshedAt(new Date(rep.generatedAt));
+
       setManualPhase("success");
-      void loadLatestReportPreview();
-    } catch {
+      console.info("[DASHBOARD] manual generate success generatedAt=" + rep.generatedAt);
+    } catch (e) {
+      const isAbort =
+        (e instanceof DOMException && e.name === "AbortError") ||
+        (e instanceof Error && e.name === "AbortError") ||
+        (e instanceof Error && /aborted/i.test(e.message));
+      const msg = e instanceof Error ? e.message : "Generate failed";
+      const friendly = isAbort
+        ? "Generation timed out. The previous report is still shown. Please try again."
+        : "Generation failed. The previous report is still shown. Please try again.";
+      console.error("[DASHBOARD] manual generate failed reason=", msg);
+      setManualGenerateError(friendly);
       setManualPhase("error");
     } finally {
       setManualSending(false);
@@ -1056,7 +1047,6 @@ export default function Home() {
     setManualSecretSaved(false);
     setManualSecretInput("");
     setManualPhase("idle");
-    setManualSnapshotJobs(null);
     setLastRunDiagnostics(null);
     setStableCountsNotice(false);
     lastDiagnosticsFingerprintRef.current = null;
@@ -1064,12 +1054,12 @@ export default function Home() {
 
   const manualButtonLabel =
     manualSending && manualPhase === "loading"
-      ? "Generating and sending…"
+      ? "Generating intelligence report… this can take up to 2 minutes."
       : !manualSending && manualPhase === "success"
-        ? "Latest report sent"
+        ? "Latest report generated"
         : !manualSending && manualPhase === "error"
-          ? "Send failed — check secret or server logs"
-          : "Generate & Send Latest Report";
+          ? manualGenerateError ?? "Generate failed — check server logs"
+          : "Generate & Refresh Latest Report";
 
   const liveSkillsReady =
     skillsLearning?.status === "ok" &&
@@ -1135,7 +1125,7 @@ export default function Home() {
                   <div className="flex w-full max-w-md flex-col gap-3 md:w-auto md:max-w-[20rem] md:items-stretch">
                     <button
                       type="button"
-                      onClick={() => void generateAndSendLatestReport()}
+                      onClick={() => void generateLatestReport()}
                       disabled={manualSending}
                       className={dt.primaryCta}
                     >
@@ -1274,6 +1264,11 @@ export default function Home() {
                       <li key={`web3ai-${idx}-${s.slice(0, 32)}`}>{s}</li>
                     ))}
                   </ul>
+                  {dashboardReport?.web3AiBrief?.sources?.length ? (
+                    <div className="mt-4">
+                      <SourceDropdown sources={dashboardReport.web3AiBrief.sources} />
+                    </div>
+                  ) : null}
                 </InfoCard>
 
                 <InfoCard
@@ -1296,28 +1291,19 @@ export default function Home() {
                       <li key={`hrbp-${idx}-${s.slice(0, 32)}`}>{s}</li>
                     ))}
                   </ul>
-                  {(weeklySummary?.sourceExamples ?? []).length > 0 ? (
-                    <details className="mt-4 rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-950/35 p-3">
-                      <summary
-                        className={`cursor-pointer text-sm font-semibold ${dt.accentText} hover:underline`}
-                      >
-                        View sources
-                      </summary>
-                      <ul className="mt-3 space-y-2 text-sm">
-                        {(weeklySummary?.sourceExamples ?? []).slice(0, 8).map((ex, idx) => (
-                          <li key={`brief-src-${idx}-${String(ex.url ?? "").slice(0, 32)}`}>
-                            <a
-                              href={ex.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className={`font-medium ${dt.accentText} ${dt.accentTextHover} underline-offset-2 hover:underline`}
-                            >
-                              {ex.title}
-                            </a>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
+                  {dashboardReport?.hrbpBrief?.sources?.length ? (
+                    <div className="mt-4">
+                      <SourceDropdown sources={dashboardReport.hrbpBrief.sources} />
+                    </div>
+                  ) : (weeklySummary?.sourceExamples ?? []).length > 0 ? (
+                    <div className="mt-4">
+                      <SourceDropdown
+                        sources={(weeklySummary?.sourceExamples ?? []).map((s) => ({
+                          title: String(s.title ?? "Source"),
+                          url: typeof s.url === "string" ? s.url : undefined,
+                        }))}
+                      />
+                    </div>
                   ) : null}
                 </InfoCard>
               </div>
@@ -1333,6 +1319,8 @@ export default function Home() {
                     ) : dashboardReport?.employmentLaw?.status === "updated" &&
                         (dashboardReport?.employmentLaw?.items?.length ?? 0) > 0 ? (
                       <Pill tone="ai">Signals</Pill>
+                    ) : dashboardReport?.employmentLaw?.status === "no_update" ? (
+                      <Pill tone="neutral">No update</Pill>
                     ) : weeklySummaryLoading ? (
                       <Pill>Loading…</Pill>
                     ) : (weeklySummary?.employmentLawSignals?.length ?? 0) > 0 ? (
@@ -1345,109 +1333,79 @@ export default function Home() {
                   <p className={`text-xs leading-relaxed ${dt.muted}`}>
                     Not legal advice. Pure crypto or securities regulation is excluded unless workforce-linked.
                   </p>
-                  {((dashboardReport?.employmentLaw?.status === "updated" &&
-                    (dashboardReport?.employmentLaw?.items?.length ?? 0) > 0) ||
-                    (weeklySummary?.employmentLawSignals?.length ?? 0) > 0) ? (
-                    <>
-                      <ul className="mt-4 list-none space-y-3">
-                        {(
-                          (dashboardReport?.employmentLaw?.items ?? []).length > 0
-                            ? (dashboardReport?.employmentLaw?.items ?? []).slice(0, 3).map((x, idx) => ({
-                                title: String(x.title ?? "Employment law signal"),
-                                jurisdiction: "",
-                                lawTheme: "",
-                                whyItQualifies: "",
-                                hrbpImplication: "",
-                                suggestedAction: "",
-                                url: typeof x.url === "string" ? x.url : "",
-                                key: `law-${idx}-${String(x.url ?? "").slice(0, 32)}`,
-                              }))
-                            : (weeklySummary?.employmentLawSignals ?? []).slice(0, 3).map((s, idx) => ({
-                                title: s.title,
-                                jurisdiction: s.jurisdiction ?? "",
-                                lawTheme: s.lawTheme ?? "",
-                                whyItQualifies: s.whyItQualifies ?? "",
-                                hrbpImplication: s.hrbpImplication ?? "",
-                                suggestedAction: s.suggestedAction ?? "",
-                                url: s.url ?? "",
-                                key: `wk-${idx}-${String(s.url ?? "")}`,
-                              }))
-                        ).map((s) => (
-                          <li key={s.key} className={insetCard}>
-                            <p className={`text-sm font-semibold ${dt.textPrimary}`}>{s.title}</p>
-                            {(s.jurisdiction || s.lawTheme) && (
-                              <p className={`mt-1 text-[11px] uppercase tracking-wide ${dt.muted}`}>
-                                {[s.jurisdiction, s.lawTheme].filter(Boolean).join(" · ")}
-                              </p>
-                            )}
-                            {s.whyItQualifies ? (
-                              <p className={`mt-1 text-xs leading-relaxed ${dt.muted}`}>{s.whyItQualifies}</p>
-                            ) : null}
-                            {s.hrbpImplication ? (
-                              <p className={`mt-2 text-xs leading-relaxed text-slate-300`}>
-                                <span className={dt.muted}>HRBP implication:</span> {s.hrbpImplication}
-                              </p>
-                            ) : null}
-                            {s.suggestedAction ? (
-                              <p className={`mt-1 text-xs leading-relaxed text-slate-300`}>
-                                <span className={dt.muted}>Suggested action:</span> {s.suggestedAction}
-                              </p>
-                            ) : null}
-                            {s.url ? (
-                              <a
-                                href={s.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`mt-2 inline-block text-xs font-semibold ${dt.accentText} hover:underline`}
-                              >
-                                View source
-                              </a>
-                            ) : (
-                              <p className={`mt-2 text-xs ${dt.muted}`}>Source not available</p>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                      {(dashboardReport?.employmentLaw?.items ?? []).some((x) => typeof x.url === "string" && x.url) ||
-                      (weeklySummary?.employmentLawSignals ?? []).some((s) => s.url) ? (
-                        <details className="mt-4 rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-950/35 p-3">
-                          <summary
-                            className={`cursor-pointer text-sm font-semibold ${dt.accentText} hover:underline`}
-                          >
-                            View sources
-                          </summary>
-                          <ul className="mt-3 space-y-2 text-sm">
-                            {(
-                              (dashboardReport?.employmentLaw?.items ?? []).length > 0
-                                ? (dashboardReport?.employmentLaw?.items ?? [])
-                                    .slice(0, 5)
-                                    .filter((x) => typeof x.url === "string" && x.url)
-                                    .map((x) => ({ url: String(x.url), title: String(x.title ?? "Source") }))
-                                : (weeklySummary?.employmentLawSignals ?? [])
-                                    .slice(0, 5)
-                                    .filter((s) => s.url)
-                                    .map((s) => ({ url: String(s.url), title: s.title }))
-                            ).map((s, idx) => (
-                              <li key={`law-src-${idx}-${s.url.slice(0, 32)}`}>
-                                <a
-                                  href={s.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className={`font-medium ${dt.accentText} ${dt.accentTextHover} underline-offset-2 hover:underline`}
-                                >
-                                  {s.title}
-                                </a>
+                  {(() => {
+                    const dashItems = dashboardReport?.employmentLaw?.items ?? [];
+                    const wkItems = weeklySummary?.employmentLawSignals ?? [];
+                    const sources =
+                      dashItems.length > 0
+                        ? dashItems.map((x, idx) => ({
+                            title: safeVisibleTitle(String(x.title ?? ""), `Employment law signal ${idx + 1}`, 140),
+                            publisher: typeof x.publisher === "string" ? x.publisher : undefined,
+                            url: typeof x.url === "string" ? x.url : undefined,
+                            date: typeof x.date === "string" ? x.date : undefined,
+                          }))
+                        : wkItems.map((s, idx) => ({
+                            title: safeVisibleTitle(String(s.title ?? ""), `Employment law signal ${idx + 1}`, 140),
+                            publisher:
+                              typeof (s as unknown as { publisher?: unknown }).publisher === "string"
+                                ? String((s as unknown as { publisher?: unknown }).publisher)
+                                : undefined,
+                            url: typeof s.url === "string" ? s.url : undefined,
+                            date:
+                              typeof (s as unknown as { date?: unknown }).date === "string"
+                                ? String((s as unknown as { date?: unknown }).date)
+                                : undefined,
+                          }));
+
+                    const headline =
+                      dashboardReport?.employmentLaw?.headline?.trim() ||
+                      dashboardReport?.employmentLaw?.summary?.trim() ||
+                      "Employment law signals are filtered to HRBP-relevant workforce implications.";
+
+                    const topSignals = cleanTextArray(
+                      dashboardReport?.employmentLaw?.signals?.length
+                        ? dashboardReport.employmentLaw.signals
+                        : wkItems.map((x) => String(x.title ?? "")),
+                      3,
+                    );
+
+                    if (sources.length === 0 && topSignals.length === 0) {
+                      return (
+                        <p className={`mt-4 text-sm ${dt.muted}`}>
+                          No strong employment law update found in current run.
+                        </p>
+                      );
+                    }
+
+                    return (
+                      <div className="mt-4 space-y-3">
+                        <p className={`text-sm leading-relaxed ${dt.textPrimary} line-clamp-2`}>
+                          {clampText(headline, 200)}
+                        </p>
+                        {topSignals.length > 0 ? (
+                          <ul className={`list-disc space-y-1 pl-5 text-sm leading-relaxed text-slate-300`}>
+                            {topSignals.slice(0, 2).map((s, idx) => (
+                              <li key={`law-top-${idx}-${s.slice(0, 24)}`} className="line-clamp-2">
+                                {safeVisibleTitle(s, "Employment law signal", 160)}
                               </li>
                             ))}
                           </ul>
-                        </details>
-                      ) : null}
-                    </>
-                  ) : (
-                    <p className={`mt-4 text-sm ${dt.muted}`}>
-                      No strong employment law update found in current run.
-                    </p>
-                  )}
+                        ) : null}
+
+                        {sources.length > 0 ? (
+                          <SourceDropdown
+                            sources={sources.map((s) => ({
+                              title: s.title,
+                              url: s.url,
+                              publisher: s.publisher,
+                              date: s.date,
+                            }))}
+                            label={`View sources (${sources.length})`}
+                          />
+                        ) : null}
+                      </div>
+                    );
+                  })()}
                 </InfoCard>
 
                 <InfoCard
@@ -1463,6 +1421,8 @@ export default function Home() {
                           dashboardReport.expansionDownsizing.restructuringCount >
                           0)) ? (
                       <Pill tone="ai">Snapshot</Pill>
+                    ) : dashboardReport?.expansionDownsizing?.status === "no_update" ? (
+                      <Pill tone="neutral">Quiet</Pill>
                     ) : weeklySummaryLoading ? (
                       <Pill>Loading…</Pill>
                     ) : (weeklySummary?.expansionSignalCount ?? 0) +
@@ -1536,7 +1496,13 @@ export default function Home() {
                       {weeklySummary?.expansionSignals?.[0] ? (
                         <p>
                           <span className="font-semibold text-slate-400">Strongest expansion:</span>{" "}
-                          <span className="text-slate-300">{weeklySummary.expansionSignals[0].title}</span>
+                          <span className="text-slate-300">
+                            {safeVisibleTitle(
+                              String(weeklySummary.expansionSignals[0].title ?? ""),
+                              "Workforce signal",
+                              140,
+                            )}
+                          </span>
                         </p>
                       ) : null}
                       {weeklySummary?.downsizingSignals?.[0] || weeklySummary?.restructuringSignals?.[0] ? (
@@ -1545,8 +1511,15 @@ export default function Home() {
                             Strongest downsizing / restructuring:
                           </span>{" "}
                           <span className="text-slate-300">
-                            {weeklySummary?.downsizingSignals?.[0]?.title ??
-                              weeklySummary?.restructuringSignals?.[0]?.title}
+                            {safeVisibleTitle(
+                              String(
+                                weeklySummary?.downsizingSignals?.[0]?.title ??
+                                  weeklySummary?.restructuringSignals?.[0]?.title ??
+                                  "",
+                              ),
+                              "Workforce signal",
+                              140,
+                            )}
                           </span>
                         </p>
                       ) : null}
@@ -1575,94 +1548,23 @@ export default function Home() {
                       ) : null}
                     </div>
                   )}
-                  {((weeklySummary?.expansionSignals?.length ?? 0) > 0 ||
-                    (weeklySummary?.downsizingSignals?.length ?? 0) > 0 ||
-                    (weeklySummary?.restructuringSignals?.length ?? 0) > 0) && (
-                    <details className="mt-4 rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-950/35 p-3">
-                      <summary
-                        className={`cursor-pointer text-sm font-semibold ${dt.accentText} hover:underline`}
-                      >
-                        View sources
-                      </summary>
-                      <div className="mt-3 space-y-4 text-sm text-slate-300">
-                        {(weeklySummary?.expansionSignals?.length ?? 0) > 0 ? (
-                          <div>
-                            <p className={`text-[11px] font-semibold uppercase tracking-wide ${dt.muted}`}>
-                              Expansion
-                            </p>
-                            <ul className="mt-1 list-disc space-y-1 pl-5">
-                              {(weeklySummary?.expansionSignals ?? []).slice(0, 4).map((s) => (
-                                <li key={`ex-${s.title}`}>
-                                  {s.url ? (
-                                    <a
-                                      href={s.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={`font-medium ${dt.accentText} hover:underline`}
-                                    >
-                                      {s.title}
-                                    </a>
-                                  ) : (
-                                    <span>{s.title}</span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                        {(weeklySummary?.downsizingSignals?.length ?? 0) > 0 ? (
-                          <div>
-                            <p className={`text-[11px] font-semibold uppercase tracking-wide ${dt.muted}`}>
-                              Downsizing
-                            </p>
-                            <ul className="mt-1 list-disc space-y-1 pl-5">
-                              {(weeklySummary?.downsizingSignals ?? []).slice(0, 4).map((s) => (
-                                <li key={`dn-${s.title}`}>
-                                  {s.url ? (
-                                    <a
-                                      href={s.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={`font-medium ${dt.accentText} hover:underline`}
-                                    >
-                                      {s.title}
-                                    </a>
-                                  ) : (
-                                    <span>{s.title}</span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
-                        {(weeklySummary?.restructuringSignals?.length ?? 0) > 0 ? (
-                          <div>
-                            <p className={`text-[11px] font-semibold uppercase tracking-wide ${dt.muted}`}>
-                              Restructuring
-                            </p>
-                            <ul className="mt-1 list-disc space-y-1 pl-5">
-                              {(weeklySummary?.restructuringSignals ?? []).slice(0, 4).map((s) => (
-                                <li key={`rs-${s.title}`}>
-                                  {s.url ? (
-                                    <a
-                                      href={s.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className={`font-medium ${dt.accentText} hover:underline`}
-                                    >
-                                      {s.title}
-                                    </a>
-                                  ) : (
-                                    <span>{s.title}</span>
-                                  )}
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        ) : null}
+                  {(() => {
+                    const src = [
+                      ...(weeklySummary?.expansionSignals ?? []),
+                      ...(weeklySummary?.downsizingSignals ?? []),
+                      ...(weeklySummary?.restructuringSignals ?? []),
+                    ]
+                      .filter((s) => s && typeof s.title === "string" && s.title.trim())
+                      .map((s) => ({
+                        title: String(s.title ?? "Source"),
+                        url: typeof s.url === "string" ? s.url : undefined,
+                      }));
+                    return src.length > 0 ? (
+                      <div className="mt-4">
+                        <SourceDropdown sources={src} label={`View sources (${src.length})`} />
                       </div>
-                    </details>
-                  )}
+                    ) : null;
+                  })()}
                 </InfoCard>
               </div>
 
@@ -1828,13 +1730,13 @@ export default function Home() {
                 )}
               </InfoCard>
 
-              <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
                 <InfoCard
                   title="Latest Preview"
                   subtitle="Last saved report output."
                   className={`${dt.cardAiModule} h-full`}
                 >
-                  <div className={`${insetCard} h-full`}>
+                  <div className={`${insetCard} flex h-full min-h-0 flex-col`}>
                     {reportPreview ? (
                       <>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -1853,7 +1755,7 @@ export default function Home() {
                         </p>
                         <p
                           className={`mt-2 text-sm leading-relaxed text-slate-300 ${
-                            previewSummaryOpen ? "" : "line-clamp-3"
+                            previewSummaryOpen ? "max-h-56 overflow-auto pr-1" : "line-clamp-3"
                           }`}
                         >
                           {reportPreview.executiveSummary || "—"}
@@ -1911,7 +1813,7 @@ export default function Home() {
                   className={`${dt.cardAiModule} h-full`}
                   right={<Pill tone="accent">{strongSignalCards.length} strong</Pill>}
                 >
-                  <div className="space-y-2">
+                  <div className="max-h-[34rem] space-y-2 overflow-auto pr-1">
                     {strongSignalCards.map((item, idx) => {
                       const open = strongSignalOpenIdx === idx;
                       return (
@@ -1923,7 +1825,9 @@ export default function Home() {
                           >
                             <div className="min-w-0">
                               <p className={`truncate text-sm font-semibold ${dt.textPrimary}`}>{item.title}</p>
-                              <p className={`mt-1 text-xs ${dt.muted}`}>{item.source ?? "Source not available"}</p>
+                              <p className={`mt-1 text-xs ${dt.muted}`}>
+                                {item.source ? item.source : "Evidence reviewed"}
+                              </p>
                             </div>
                             <div className="flex items-center gap-2">
                               <Pill tone="accent">Strong</Pill>
@@ -1960,102 +1864,6 @@ export default function Home() {
                       );
                     })}
                   </div>
-                </InfoCard>
-
-                <InfoCard
-                  title="Job Opportunities Snapshot"
-                  subtitle="Top-fit roles from live ingestion."
-                  className={`${dt.cardAiModule} h-full`}
-                  right={
-                    <div className="flex flex-wrap justify-end gap-2">
-                      {liveJobsLoading ? <Pill>Loading…</Pill> : null}
-                      {mergedLiveJobsFull.length > 0 ? <Pill tone="success">Live</Pill> : <Pill tone="neutral">Quiet</Pill>}
-                      <Pill>{mergedLiveJobsFull.length} roles</Pill>
-                    </div>
-                  }
-                >
-                  {mergedTop3.length === 0 ? (
-                    <p className={`text-sm ${dt.muted}`}>No live job opportunities found in the current run.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {mergedTop3.map((opp, idx) => {
-                        const open = jobSnapshotOpenIdx === idx;
-                        const href = primaryJobHref(opp);
-                        const linkedInRow =
-                          opp.source === "LinkedIn Job Alert" ||
-                          (opp.applyUrl?.includes("linkedin.com") ?? false);
-                        const applyLabel =
-                          linkedInRow || !isRealJobApplyUrl(opp.applyUrl) ? "View source" : "Apply";
-                        const whyThisFits = lookupWhyThisFits(opp);
-
-                        return (
-                          <div key={`${opp.role}-${opp.company}-${idx}`} className={insetCard}>
-                            <button
-                              type="button"
-                              onClick={() => setJobSnapshotOpenIdx((cur) => (cur === idx ? null : idx))}
-                              className="flex w-full items-start justify-between gap-3 text-left"
-                            >
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-slate-100">{opp.role}</p>
-                                <p className="mt-1 text-xs text-slate-400">{opp.company || "—"}</p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {opp.needsLinkedInReview ? <Pill tone="warning">Needs Review</Pill> : null}
-                                <Pill className={dt.pillFit}>
-                                  {typeof opp.fitScore === "number" ? `${opp.fitScore}/100` : "—"} fit
-                                </Pill>
-                                <span className={`${dt.muted}`}>
-                                  <Chevron open={open} />
-                                </span>
-                              </div>
-                            </button>
-                            <Collapsible open={open}>
-                              <div className="pt-3">
-                                <p className={`text-xs ${dt.muted}`}>
-                                  {[opp.location, opp.source].filter(Boolean).join(" · ") || "—"}
-                                </p>
-                                {whyThisFits ? (
-                                  <p className="mt-2 text-sm leading-relaxed text-slate-300">
-                                    <span className="font-semibold text-slate-200">Why this fits:</span>{" "}
-                                    {whyThisFits}
-                                  </p>
-                                ) : null}
-                                {opp.needsLinkedInReview ? (
-                                  <p className="mt-2 text-xs leading-relaxed text-amber-200/90">
-                                    Open LinkedIn to verify role, employer and location before applying.
-                                  </p>
-                                ) : null}
-                                <div className="mt-3">
-                                  <a
-                                    href={href}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={`inline-flex items-center justify-center ${dt.cardRadius} ${
-                                      linkedInRow || !isRealJobApplyUrl(opp.applyUrl)
-                                        ? `${dt.applyButtonSecondary} transition`
-                                        : `${dt.applyButtonPrimary} transition`
-                                    } px-3 py-2 text-sm font-semibold`}
-                                  >
-                                    {applyLabel}
-                                  </a>
-                                </div>
-                              </div>
-                            </Collapsible>
-                          </div>
-                        );
-                      })}
-                      {mergedLiveJobsDisplay.length > 0 ? (
-                        <details className="rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-950/30 p-3">
-                          <summary
-                            className={`cursor-pointer text-sm font-semibold ${dt.accentText} ${dt.accentTextHover} hover:underline`}
-                          >
-                            View all live jobs
-                          </summary>
-                          <LiveJobsDetailsList jobs={mergedLiveJobsDisplay} hasMore={mergedLiveJobsHasMore} />
-                        </details>
-                      ) : null}
-                    </div>
-                  )}
                 </InfoCard>
               </div>
             </div>

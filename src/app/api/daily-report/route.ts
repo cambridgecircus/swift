@@ -1,5 +1,4 @@
-import { runReportAndSendEmail } from "@/lib/reportRunner";
-import { normalizeDashboardReport } from "@/lib/dashboardReportMapper";
+import { generateSwiftIntelligenceReport } from "@/lib/swiftIntelligenceReport";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -16,22 +15,16 @@ export async function GET(request: Request) {
     return Response.json({ status: "error", message: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await runReportAndSendEmail({ runType: "scheduled" });
-
-  if (result.status !== "ok") {
-    return Response.json(
-      { status: "error", message: result.message },
-      { status: 500 },
-    );
-  }
+  const result = await generateSwiftIntelligenceReport({ source: "daily", sendEmail: true });
 
   return Response.json({
     status: "ok",
     ok: true,
-    message: "Daily report generated and email sent successfully.",
-    emailResult: result.emailResult,
-    report: normalizeDashboardReport({ report: result.report }) ?? normalizeDashboardReport({ rawReport: result.report }),
+    message: "Daily report generated and email attempted successfully.",
+    report: result.dashboardReport,
     rawReport: result.report,
     storage: result.storage,
+    emailStatus: result.emailStatus,
+    emailMessageId: result.emailMessageId,
   });
 }

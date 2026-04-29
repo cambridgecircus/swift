@@ -1,4 +1,9 @@
-import { buildDeterministicContractIntel, shouldUseDeepSeek, generateDeepSeekReport } from "@/lib/deepseekClient";
+import {
+  buildDeterministicContractIntel,
+  shouldUseDeepSeek,
+  generateDeepSeekReport,
+  triageSignalsWithDeepSeekResult,
+} from "@/lib/deepseekClient";
 import { fetchLinkedInJobAlertEmails } from "@/lib/gmailLinkedIn";
 import { isRealJobApplyUrl } from "@/lib/jobApplyUrl";
 import { gatherReportStorageContext } from "@/lib/reportStorageContext";
@@ -72,6 +77,21 @@ export type IntelligenceReport = {
   generatedAt: string;
   headline: string;
   executiveSummary: string;
+  /** Safe diagnostics — no secrets. */
+  gmailIntelStatus?: "ok" | "missing_env" | "failed" | "skipped";
+  gmailIntelRawItemCount?: number;
+  gmailIntelItemsSentToAI?: number;
+  gmailIntelSignalsCount?: number;
+  gmailIntelQualifiedSignalCount?: number;
+  rssRawItemCount?: number;
+  rssItemsSentToAI?: number;
+  rssSignalsCount?: number;
+  rssQualifiedSignalCount?: number;
+  aiSignalsCount?: number;
+  aiProvider?: string;
+  aiTriageUsed?: boolean;
+  aiTriageQualifiedCount?: number;
+  finalAIReportUsed?: boolean;
   keySignals: KeySignal[];
   hrbpRecommendations: string[];
   thisWeekPattern?: string;
@@ -341,6 +361,11 @@ function buildRulesBasedReport(
     executiveSummary: `This report ingested ${cleanedSignals.length} cleaned RSS signals. ${
       extras.weeklyPattern || "Weekly repository snapshot not available or empty."
     } Use the Expansion & Downsizing and Employment Law blocks for keyword-scanned implications from the same ingest — not legal advice.`,
+    gmailIntelStatus: undefined,
+    gmailIntelSignalsCount: undefined,
+    rssSignalsCount: cleanedSignals.length,
+    aiSignalsCount: cleanedSignals.length,
+    aiProvider: "deterministic",
     keySignals,
     hrbpRecommendations: recommendations,
     web3AiBriefLines: web3Lines.length ? web3Lines : web3AiBriefLinesFromMixed(cleanedSignals),
@@ -370,6 +395,15 @@ export async function generateReport(options?: {
 }): Promise<IntelligenceReport> {
   const pre = options?.storageContext;
 
+  // Start Gmail Intel pipeline early; never blocks the rest.
+  const dmPromise = (async () => {
+    try {
+      return await runDailyMarketPipeline();
+    } catch {
+      return null;
+    }
+  })();
+
   const [weekly, skillsLearning, ingestBundle] = await Promise.all([
     getWeeklySummary(7).catch(() => null),
     getLiveSkillsAndLearning().catch(() => null),
@@ -394,50 +428,99 @@ export async function generateReport(options?: {
   const weeklyPattern = weeklyPatternFromSummary(weekly);
   const jobDefaults = buildJobDefaultsFromCtx(ctx?.jobOpportunities ?? []);
 
-  // Optional: enrich report inputs with curated Daily Market Intel articles.
-  // This must never crash the report pipeline and should run at most once.
-  const dm = await (async () => {
-    try {
-      return await runDailyMarketPipeline();
-    } catch {
-      return null;
-    }
-  })();
+  const hasGmailCreds = Boolean(process.env.GMAIL_USER?.trim() && process.env.GMAIL_APP_PASSWORD?.trim());
 
-  const dailyMarketSignals: CleanMarketSignal[] = (() => {
+  const dm = await dmPromise;
+
+  const gmailIntelStatus: IntelligenceReport["gmailIntelStatus"] = !hasGmailCreds
+    ? "missing_env"
+    : dm
+      ? dm.deterministicCandidateCount > 0
+        ? "ok"
+        : "skipped"
+      : "failed";
+
+  const gmailIntelSignals: CleanMarketSignal[] = (() => {
     if (!dm) return [];
-    const kept = Object.values(dm.articlesBySection)
+    // AI-first: do NOT require keep/drop curation before triage.
+    // We only apply minimal safety filtering + caps here.
+    const raw = Object.values(dm.articlesBySection)
       .flat()
-      .filter((a) => a.keep)
-      .slice(0, 20);
+      .filter((a) => a && typeof a.title === "string" && a.title.trim())
+      .filter((a) => typeof a.url === "string" && /^https?:\/\//i.test(a.url))
+      .filter((a) => !/linkedin\.com/i.test(String(a.url ?? "")));
+
     const sectionToCategory = (s: string): CleanMarketSignal["category"] =>
       s === "ai_market" || s === "web3_market" ? "web3_ai" : "hrbp";
-    return kept.map((a, idx) => ({
-      id: `dm-${idx}-${(a.url || "").slice(-18)}`,
-      title: a.title,
-      sourceName: a.source ?? a.resolvedSource ?? "news.google.com",
-      url: a.resolvedUrl ?? a.url,
-      publishedAt: a.publishedAt,
-      category: sectionToCategory(a.sectionKey),
-      tags: [a.sectionKey, a.contentQuality],
-      relevanceScore: Math.max(0, Math.min(100, a.relevanceScore ?? 50)),
-      signalStrength:
-        a.contentQuality === "full_text"
-          ? "Strong"
-          : a.contentQuality === "rss_snippet"
-            ? "Moderate"
-            : "Weak",
-      summary: (a.aiArticleSummary?.trim() || a.rssSnippet?.trim() || a.title).slice(0, 900),
-      whyItMatters:
-        "Curated from Daily Market Intel ingestion pipeline (confidence depends on contentQuality).",
-      hrbpImplication: "Use this as an input signal; do not overclaim beyond provided text.",
-    }));
+
+    const cap = 40;
+    const seen = new Set<string>();
+    const out: CleanMarketSignal[] = [];
+    for (let i = 0; i < raw.length; i++) {
+      const a = raw[i]!;
+      const title = String(a.title ?? "").trim();
+      const url = String(a.resolvedUrl ?? a.url ?? "").trim();
+      const key = `${title.toLowerCase().slice(0, 160)}|${url.toLowerCase()}`;
+      if (!title || !url) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        id: `gmail-${i}-${url.slice(-18)}`,
+        title,
+        sourceName: `Gmail SWIFT Intel · ${a.source ?? a.resolvedSource ?? "news.google.com"}`,
+        url,
+        publishedAt: a.publishedAt,
+        category: sectionToCategory(String(a.sectionKey ?? "hrbp_leadership")),
+        tags: [
+          "source:gmail_swift_intel",
+          "sourceType:gmail_swift_intel",
+          "sourcePriority:primary",
+          String(a.sectionKey ?? ""),
+          String(a.contentQuality ?? "title_only"),
+        ].filter(Boolean),
+        relevanceScore: Math.max(0, Math.min(100, a.relevanceScore ?? 50)),
+        signalStrength:
+          a.contentQuality === "full_text"
+            ? "Strong"
+            : a.contentQuality === "rss_snippet"
+              ? "Moderate"
+              : "Weak",
+        summary: (a.textForAI?.trim() || a.aiArticleSummary?.trim() || a.rssSnippet?.trim() || title).slice(0, 900),
+        whyItMatters: "Primary-source raw Gmail Intel candidate (AI triage decides inclusion).",
+        hrbpImplication: "AI triage will infer HRBP implications; treat this as evidence input only.",
+      });
+      if (out.length >= cap) break;
+    }
+    return out;
   })();
+
+  const rssSignals: CleanMarketSignal[] = (cleanedSignals ?? []).map((s) => {
+    const tags = Array.isArray(s.tags) ? s.tags : [];
+    const hasSourceTag = tags.some((t) => typeof t === "string" && t.startsWith("source:"));
+    const nextTags = hasSourceTag ? tags : [...tags, "source:rss"];
+    const srcName = String(s.sourceName ?? "");
+    const nextSourceName = srcName.startsWith("Gmail SWIFT Intel ·") || srcName.startsWith("RSS ·")
+      ? srcName
+      : `RSS · ${srcName || "source"}`;
+    return { ...s, tags: nextTags, sourceName: nextSourceName };
+  });
+
+  console.info("[generate_report] gmail intel curation", {
+    gmailCandidates: dm?.deterministicCandidateCount ?? 0,
+    curatedKeepCount: dm ? Object.values(dm.articlesBySection).flat().filter((a) => a.keep).length : 0,
+    sentToAI: gmailIntelSignals.length,
+  });
+
+  console.info("[generate_report] signal inputs", {
+    gmailIntelStatus,
+    gmailIntelSignals: gmailIntelSignals.length,
+    rssSignals: rssSignals.length,
+  });
 
   const employmentLawFallbackFromDm = (() => {
     const law = dm?.articlesBySection?.employment_law ?? [];
-    // For dashboard completeness, derive from available section items even if AI curation rejected them.
-    const selected = law.slice(0, 12);
+    // Only use curated "keep" items; avoid dumping weak/noisy headlines into Employment Law.
+    const selected = law.filter((a) => Boolean(a.keep)).slice(0, 12);
     if (selected.length === 0) return null;
     return {
       headline: "Employment law signals (from SWIFT Employment Law Trends)",
@@ -555,17 +638,71 @@ export async function generateReport(options?: {
 
   const extras = { weeklyPattern, jobRows: mergedJobRows, skills, learning };
 
-  const mergedSignals = [...dailyMarketSignals, ...cleanedSignals];
+  const mergedSignals = [...gmailIntelSignals, ...rssSignals];
 
   if (mergedSignals.length > 0) {
+    const useDeepSeek = shouldUseDeepSeek();
+    console.info("[generate_report] generating dashboard report", {
+      mergedSignalsCount: mergedSignals.length,
+      useDeepSeek,
+    });
+
     if (shouldUseDeepSeek()) {
-      const aiContract = await generateDeepSeekReport({
+      console.info("[generate_report] ai triage started");
+      const triageResult = await triageSignalsWithDeepSeekResult({
         cleanedSignals: mergedSignals,
+        generatedAt,
+      });
+      const triage = triageResult.ok ? triageResult.triage : null;
+      const triageUsed = Boolean(triage);
+      if (!triageUsed) {
+        // Safe diagnostics only (no secrets, no payload dump).
+        console.warn("[generate_report] ai triage failed", {
+          apiStatus: triageResult.diagnostics.apiStatus,
+          apiErrorMessage: triageResult.diagnostics.apiErrorMessage,
+          parseError: triageResult.diagnostics.parseError,
+          validationMissingFields: triageResult.diagnostics.validationMissingFields,
+          modelsAttempted: triageResult.diagnostics.modelsAttempted,
+        });
+      }
+      let qualifiedSignals: CleanMarketSignal[] = mergedSignals;
+      let gmailIntelQualified = gmailIntelSignals.length;
+      let rssQualified = rssSignals.length;
+
+      if (triageUsed) {
+        const byId = new Map(triage!.items.map((t) => [t.id, t]));
+        // AI-first: only include items explicitly selected by triage.
+        qualifiedSignals = mergedSignals
+          .map((s) => ({ s, t: byId.get(s.id) }))
+          .filter((x) => x.t?.includeInCards && x.t.isQualifiedSignal)
+          .sort((a, b) => (b.t?.strategicRelevance ?? 0) - (a.t?.strategicRelevance ?? 0))
+          .slice(0, 26)
+          .map((x) => x.s);
+        if (qualifiedSignals.length === 0) {
+          // Guardrail: never allow an empty qualified set to produce an empty dashboard.
+          qualifiedSignals = mergedSignals.slice(0, 12);
+        }
+
+        const isGmail = (sig: CleanMarketSignal) =>
+          Array.isArray(sig.tags) && sig.tags.some((t) => typeof t === "string" && t === "source:gmail_swift_intel");
+        gmailIntelQualified = qualifiedSignals.filter(isGmail).length;
+        rssQualified = qualifiedSignals.length - gmailIntelQualified;
+      }
+      console.info("[generate_report] ai triage completed", {
+        triageUsed,
+        qualifiedSignalCount: qualifiedSignals.length,
+        excludedSignalCount: mergedSignals.length - qualifiedSignals.length,
+      });
+
+      console.info("[generate_report] deepseek generation started");
+      const aiContract = await generateDeepSeekReport({
+        cleanedSignals: qualifiedSignals,
         generatedAt,
         jobOpportunityDefaults: jobDefaults,
         weeklyPattern,
       });
       if (aiContract) {
+        console.info("[generate_report] deepseek generation succeeded");
         const mapped = mapAIReportContractToIntelligenceReport(aiContract, generatedAt, weeklyPattern);
         if (
           employmentLawFallbackFromDm &&
@@ -575,11 +712,55 @@ export async function generateReport(options?: {
         }
         return {
           ...mapped,
+          gmailIntelStatus,
+          gmailIntelRawItemCount: dm?.deterministicCandidateCount ?? undefined,
+          gmailIntelItemsSentToAI: gmailIntelSignals.length,
+          gmailIntelSignalsCount: gmailIntelSignals.length,
+          gmailIntelQualifiedSignalCount: gmailIntelQualified,
+          rssRawItemCount: rssSignals.length,
+          rssItemsSentToAI: rssSignals.length,
+          rssSignalsCount: rssSignals.length,
+          rssQualifiedSignalCount: rssQualified,
+          aiSignalsCount: qualifiedSignals.length,
+          aiProvider: "deepseek",
+          aiTriageUsed: triageUsed,
+          aiTriageQualifiedCount: qualifiedSignals.length,
+          finalAIReportUsed: true,
           liveJobOpportunities: [...gmailLinkedInRows, ...(mapped.liveJobOpportunities ?? [])].slice(0, 12),
         };
       }
+      console.info("[generate_report] deepseek returned no usable contract; falling back");
+
+      // If triage succeeded but final report failed/timed out, we still want:
+      // - diagnostics to show triage influence
+      // - deterministic fallback to run on the triaged subset (not the full raw set)
+      const detFromQualified = buildRulesBasedReport(qualifiedSignals, generatedAt, extras);
+      if (
+        employmentLawFallbackFromDm &&
+        (!detFromQualified.employmentLaw?.items || detFromQualified.employmentLaw.items.length === 0)
+      ) {
+        detFromQualified.employmentLaw = employmentLawFallbackFromDm;
+      }
+      return {
+        ...detFromQualified,
+        gmailIntelStatus,
+        gmailIntelRawItemCount: dm?.deterministicCandidateCount ?? undefined,
+        gmailIntelItemsSentToAI: gmailIntelSignals.length,
+        gmailIntelSignalsCount: gmailIntelSignals.length,
+        gmailIntelQualifiedSignalCount: gmailIntelQualified,
+        rssRawItemCount: rssSignals.length,
+        rssItemsSentToAI: rssSignals.length,
+        rssSignalsCount: rssSignals.length,
+        rssQualifiedSignalCount: rssQualified,
+        aiSignalsCount: qualifiedSignals.length,
+        aiProvider: "deterministic",
+        aiTriageUsed: triageUsed,
+        aiTriageQualifiedCount: qualifiedSignals.length,
+        finalAIReportUsed: false,
+      };
     }
 
+    console.info("[generate_report] using deterministic rules-based report fallback");
     const det = buildRulesBasedReport(mergedSignals, generatedAt, extras);
     if (
       employmentLawFallbackFromDm &&
@@ -587,7 +768,21 @@ export async function generateReport(options?: {
     ) {
       det.employmentLaw = employmentLawFallbackFromDm;
     }
-    return det;
+    return {
+      ...det,
+      gmailIntelStatus,
+      gmailIntelRawItemCount: dm?.deterministicCandidateCount ?? undefined,
+      gmailIntelItemsSentToAI: gmailIntelSignals.length,
+      gmailIntelSignalsCount: gmailIntelSignals.length,
+      gmailIntelQualifiedSignalCount: gmailIntelSignals.length,
+      rssRawItemCount: rssSignals.length,
+      rssItemsSentToAI: rssSignals.length,
+      rssSignalsCount: rssSignals.length,
+      aiSignalsCount: mergedSignals.length,
+      aiProvider: "deterministic",
+      aiTriageUsed: false,
+      finalAIReportUsed: false,
+    };
   }
 
   const mockSignals: KeySignal[] = [
