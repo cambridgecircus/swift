@@ -5,6 +5,7 @@ import { gatherReportStorageContext } from "@/lib/reportStorageContext";
 import { getWeeklySummary } from "@/lib/intelligenceStorage";
 import { getLiveSkillsAndLearning } from "@/lib/skillsAndLearning";
 import type { AIReportContract, CleanMarketSignal, HistoricalJobLink } from "@/lib/types";
+import { runDailyMarketPipeline } from "@/lib/swiftDailyMarketPipeline";
 
 export type KeySignal = {
   title: string;
@@ -393,22 +394,126 @@ export async function generateReport(options?: {
   const weeklyPattern = weeklyPatternFromSummary(weekly);
   const jobDefaults = buildJobDefaultsFromCtx(ctx?.jobOpportunities ?? []);
 
-  const gmailLinkedInAlerts = await fetchLinkedInJobAlertEmails().catch(() => []);
-  const gmailLinkedInRows: LiveJobEmailRow[] = (gmailLinkedInAlerts ?? []).slice(0, 10).map((email) => {
-    const location = extractLocationFromLinkedInAlert(email.text) ?? "Location from LinkedIn alert";
-    const url = extractFirstRealUrlFromText(email.text);
+  // Optional: enrich report inputs with curated Daily Market Intel articles.
+  // This must never crash the report pipeline and should run at most once.
+  const dm = await (async () => {
+    try {
+      return await runDailyMarketPipeline();
+    } catch {
+      return null;
+    }
+  })();
+
+  const dailyMarketSignals: CleanMarketSignal[] = (() => {
+    if (!dm) return [];
+    const kept = Object.values(dm.articlesBySection)
+      .flat()
+      .filter((a) => a.keep)
+      .slice(0, 20);
+    const sectionToCategory = (s: string): CleanMarketSignal["category"] =>
+      s === "ai_market" || s === "web3_market" ? "web3_ai" : "hrbp";
+    return kept.map((a, idx) => ({
+      id: `dm-${idx}-${(a.url || "").slice(-18)}`,
+      title: a.title,
+      sourceName: a.source ?? a.resolvedSource ?? "news.google.com",
+      url: a.resolvedUrl ?? a.url,
+      publishedAt: a.publishedAt,
+      category: sectionToCategory(a.sectionKey),
+      tags: [a.sectionKey, a.contentQuality],
+      relevanceScore: Math.max(0, Math.min(100, a.relevanceScore ?? 50)),
+      signalStrength:
+        a.contentQuality === "full_text"
+          ? "Strong"
+          : a.contentQuality === "rss_snippet"
+            ? "Moderate"
+            : "Weak",
+      summary: (a.aiArticleSummary?.trim() || a.rssSnippet?.trim() || a.title).slice(0, 900),
+      whyItMatters:
+        "Curated from Daily Market Intel ingestion pipeline (confidence depends on contentQuality).",
+      hrbpImplication: "Use this as an input signal; do not overclaim beyond provided text.",
+    }));
+  })();
+
+  const employmentLawFallbackFromDm = (() => {
+    const law = dm?.articlesBySection?.employment_law ?? [];
+    // For dashboard completeness, derive from available section items even if AI curation rejected them.
+    const selected = law.slice(0, 12);
+    if (selected.length === 0) return null;
     return {
-      role: email.subject || "LinkedIn job alert",
-      company: "LinkedIn Job Alerts",
-      location,
-      source: "LinkedIn Gmail Alert",
-      fitScore: 85,
-      applyUrl: url,
-      sourceUrl: url,
-      whyThisFits:
-        "Saved LinkedIn Job Alert matching your SWIFT Web3 × AI HRBP search; open the alert email to review role details and apply.",
+      headline: "Employment law signals (from SWIFT Employment Law Trends)",
+      disclaimer:
+        "Derived from Gmail Intel source items when the AI report block is empty. Not legal advice.",
+      items: selected.slice(0, 10).map((a) => ({
+        title: a.title,
+        whatChanged: a.contentPreview?.trim() ? a.contentPreview.trim() : a.title,
+        whyItMatters: (a.rssSnippet?.trim() || a.aiArticleSummary?.trim() || a.textForAI).slice(0, 700),
+        hrbpImplication:
+          "Assess workforce impact, policy exposure, and comms/consultation readiness.",
+        suggestedAction:
+          "Flag to Legal/ER; validate jurisdiction and applicability; update playbooks if needed.",
+        sourceName: a.source ?? a.resolvedSource ?? "Gmail Intel",
+        sourceUrl: (a.resolvedUrl ?? a.url).trim(),
+      })),
     };
-  });
+  })();
+
+  const gmailLinkedInAlerts = await fetchLinkedInJobAlertEmails().catch(() => []);
+  const gmailLinkedInRows: LiveJobEmailRow[] = (() => {
+    const rows: LiveJobEmailRow[] = [];
+    const seenJobKeys = new Set<string>();
+
+    const jobKeyFromUrl = (u: string): string => {
+      try {
+        const parsed = new URL(u);
+        const path = parsed.pathname;
+        const m = path.match(/\/jobs\/view\/(\d+)/i) ?? path.match(/\/comm\/jobs\/view\/(\d+)/i);
+        return m?.[1] ? `job:${m[1]}` : `url:${parsed.toString().toLowerCase()}`;
+      } catch {
+        return `url:${u.toLowerCase()}`;
+      }
+    };
+
+    for (const email of (gmailLinkedInAlerts ?? []).slice(0, 10)) {
+      const location = extractLocationFromLinkedInAlert(email.text) ?? "Location from LinkedIn alert";
+
+      const preferred: string[] = [];
+      if (typeof email.primaryUrl === "string" && isRealJobApplyUrl(email.primaryUrl)) {
+        preferred.push(email.primaryUrl);
+      }
+      if (Array.isArray(email.urls)) {
+        for (const u of email.urls) {
+          if (typeof u === "string" && isRealJobApplyUrl(u)) preferred.push(u);
+        }
+      }
+      if (preferred.length === 0) {
+        const fallback = extractFirstRealUrlFromText(email.text);
+        if (fallback) preferred.push(fallback);
+      }
+
+      // If we have multiple job URLs, emit separate rows per distinct job id when possible.
+      const urlsToEmit = preferred.length > 0 ? preferred : [undefined];
+      for (const u of urlsToEmit) {
+        const url = typeof u === "string" && isRealJobApplyUrl(u) ? u : undefined;
+        const key = url ? jobKeyFromUrl(url) : `email:${(email.subject ?? "").toLowerCase()}|no-url`;
+        if (seenJobKeys.has(key)) continue;
+        seenJobKeys.add(key);
+        rows.push({
+          role: email.subject || "LinkedIn job alert",
+          company: "LinkedIn Job Alerts",
+          location,
+          source: "LinkedIn Gmail Alert",
+          fitScore: 85,
+          applyUrl: url,
+          sourceUrl: url,
+          whyThisFits:
+            "Saved LinkedIn Job Alert matching your SWIFT Web3 × AI HRBP search; open the alert email to review role details and apply.",
+        });
+        if (rows.length >= 12) break;
+      }
+      if (rows.length >= 12) break;
+    }
+    return rows;
+  })();
 
   const jobRows: LiveJobEmailRow[] = (ctx?.jobOpportunities ?? [])
     .flatMap((r) => {
@@ -450,16 +555,24 @@ export async function generateReport(options?: {
 
   const extras = { weeklyPattern, jobRows: mergedJobRows, skills, learning };
 
-  if (cleanedSignals.length > 0) {
+  const mergedSignals = [...dailyMarketSignals, ...cleanedSignals];
+
+  if (mergedSignals.length > 0) {
     if (shouldUseDeepSeek()) {
       const aiContract = await generateDeepSeekReport({
-        cleanedSignals,
+        cleanedSignals: mergedSignals,
         generatedAt,
         jobOpportunityDefaults: jobDefaults,
         weeklyPattern,
       });
       if (aiContract) {
         const mapped = mapAIReportContractToIntelligenceReport(aiContract, generatedAt, weeklyPattern);
+        if (
+          employmentLawFallbackFromDm &&
+          (!mapped.employmentLaw?.items || mapped.employmentLaw.items.length === 0)
+        ) {
+          mapped.employmentLaw = employmentLawFallbackFromDm;
+        }
         return {
           ...mapped,
           liveJobOpportunities: [...gmailLinkedInRows, ...(mapped.liveJobOpportunities ?? [])].slice(0, 12),
@@ -467,7 +580,14 @@ export async function generateReport(options?: {
       }
     }
 
-    return buildRulesBasedReport(cleanedSignals, generatedAt, extras);
+    const det = buildRulesBasedReport(mergedSignals, generatedAt, extras);
+    if (
+      employmentLawFallbackFromDm &&
+      (!det.employmentLaw?.items || det.employmentLaw.items.length === 0)
+    ) {
+      det.employmentLaw = employmentLawFallbackFromDm;
+    }
+    return det;
   }
 
   const mockSignals: KeySignal[] = [

@@ -25,6 +25,11 @@ Expansion & downsizing classification (strict):
 - Explain peopleImplication and suggestedHrbpAction in workforce planning, org design, hiring, ER, and change-management terms.
 - Expansion & Downsizing Trends are NOT general market growth indicators. Do not classify generic product launches, token/fund/ETF milestones, AI product updates, HR education, or role-definition articles unless the item explicitly includes workforce/org/footprint change language (hiring/headcount, office/hub/entity setup, market entry/operations expansion, layoffs/redundancy/hiring freeze, restructuring/team consolidation/delayering).
 
+Evidence quality (important when present):
+- Some cleanedSignals may include an extra field "contentQuality" with one of: "full_text" | "rss_snippet" | "title_only".
+- Treat "full_text" as strongest evidence, "rss_snippet" as medium evidence, and "title_only" as weak evidence.
+- If you rely on weak evidence, explicitly say that some signals are based on limited metadata because full text was unavailable, and avoid inventing details beyond the provided text.
+
 Shape (exact keys, exact types):
 
 1) executiveSummary: string — 4–6 sentences. Must explicitly connect: (a) Web3/AI market signals, (b) HRBP implications, (c) job opportunities (from jobOpportunityDefaults if any), (d) skills/learning priorities implied by signals. Executive, concrete, no filler.

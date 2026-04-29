@@ -1,4 +1,5 @@
 import { runReportAndSendEmail } from "@/lib/reportRunner";
+import { normalizeDashboardReport } from "@/lib/dashboardReportMapper";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -26,9 +27,11 @@ export async function GET(request: Request) {
 
   return Response.json({
     status: "ok",
+    ok: true,
     message: "Daily report generated and email sent successfully.",
     emailResult: result.emailResult,
-    report: result.report,
+    report: normalizeDashboardReport({ report: result.report }) ?? normalizeDashboardReport({ rawReport: result.report }),
+    rawReport: result.report,
     storage: result.storage,
   });
 }

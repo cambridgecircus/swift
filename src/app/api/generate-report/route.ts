@@ -2,6 +2,7 @@ import { generateReport } from "@/lib/generateReport";
 import { saveIntelligenceRun } from "@/lib/intelligenceStorage";
 import { gatherReportStorageContext } from "@/lib/reportStorageContext";
 import { getSourceRegistrySummary } from "@/lib/sourceRegistrySummary";
+import { normalizeDashboardReport } from "@/lib/dashboardReportMapper";
 
 export async function POST() {
   const report = await generateReport();
@@ -28,5 +29,11 @@ export async function POST() {
     storage = { saved: false, error: "Storage failed" };
   }
 
-  return Response.json({ ...report, storage });
+  return Response.json({
+    ok: true,
+    generatedAt: report.generatedAt,
+    report: normalizeDashboardReport({ report }) ?? null,
+    rawReport: report,
+    storage,
+  });
 }

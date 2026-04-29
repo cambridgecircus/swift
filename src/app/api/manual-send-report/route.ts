@@ -1,5 +1,6 @@
 import { jsonResponseNoStore } from "@/lib/httpNoStore";
 import { runReportAndSendEmail } from "@/lib/reportRunner";
+import { normalizeDashboardReport } from "@/lib/dashboardReportMapper";
 
 export const dynamic = "force-dynamic";
 
@@ -28,10 +29,12 @@ export async function POST(request: Request) {
 
   return jsonResponseNoStore({
     status: "ok",
+    ok: true,
     message: "Manual report generated and email sent successfully.",
     emailResult: result.emailResult,
     storage: result.storage,
-    report: result.report,
+    report: normalizeDashboardReport({ report: result.report }) ?? normalizeDashboardReport({ rawReport: result.report }),
+    rawReport: result.report,
     liveJobs: result.liveJobs,
     liveJobsTotalDeduped: result.liveJobsTotalDeduped,
     liveJobsHasMore: result.liveJobsHasMore,

@@ -27,6 +27,14 @@ export type LiveJobIngestionResponse = {
   opportunities: CleanJobOpportunity[];
   needsManualReview: NeedsManualReviewJob[];
   sourceHealth: LiveJobSourceHealth[];
+  linkedInCache?: {
+    reason: "cache_hit" | "cache_miss" | "cache_expired";
+    isRefreshing: boolean;
+    hasCachedValue: boolean;
+    lastUpdatedAt: string | null;
+    ttlMs: number;
+    forceRefresh?: boolean;
+  };
 };
 
 const ATS_HOST_MARKERS = [

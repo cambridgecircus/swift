@@ -30,6 +30,7 @@ import {
 } from "@/lib/linkedinJobAlertIngestion";
 import { runDiagnosticsFingerprint, type RunDiagnostics } from "@/lib/runDiagnostics";
 import type { LiveLearningAsset, LiveSkillToPickUp, LiveSkillsAndLearningResult } from "@/lib/skillsAndLearning";
+import { normalizeDashboardReport, type DashboardReport } from "@/lib/dashboardReportMapper";
 
 type DashboardBrief = {
   title: string;
@@ -64,6 +65,23 @@ const hrbpBrief: DashboardBrief = {
     "People analytics must translate into actions, not observations.",
   ],
 };
+
+function cleanTextArray(input: Array<string | null | undefined>, limit = 5): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    const t = (raw ?? "").trim().replace(/\s+/g, " ");
+    if (!t) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+// Brief mapping is centralised in `dashboardReportMapper`.
 
 function Pill({
   children,
@@ -283,8 +301,8 @@ function EvidenceBullet({ line }: { line: string }) {
             Sources
           </summary>
           <ul className="mt-1.5 space-y-1 pl-3">
-            {rest.map((u) => (
-              <li key={u}>
+            {rest.map((u, idx) => (
+              <li key={`evidence-src-${idx}-${u.slice(0, 32)}`}>
                 <a
                   href={u}
                   target="_blank"
@@ -361,15 +379,15 @@ function LiveSkillDetailCard({
 
         <p className={`mt-4 ${dt.labelCaps}`}>Evidence</p>
         <ul className="mt-1 list-none space-y-2 pl-0 text-sm text-slate-300">
-          {skill.evidenceSignals.map((x) => (
-            <EvidenceBullet key={x} line={x} />
+          {cleanTextArray(skill.evidenceSignals, 12).map((x, idx) => (
+            <EvidenceBullet key={`skill-ev-${idx}-${x.slice(0, 32)}`} line={x} />
           ))}
         </ul>
 
         <p className={`mt-4 ${dt.labelCaps}`}>Related topics</p>
         <div className="mt-2 flex flex-wrap gap-2">
-          {skill.relatedTopics.map((t) => (
-            <span key={t} className={dt.secondaryChip}>
+          {cleanTextArray(skill.relatedTopics, 16).map((t, idx) => (
+            <span key={`skill-topic-${idx}-${t.slice(0, 32)}`} className={dt.secondaryChip}>
               {t}
             </span>
           ))}
@@ -412,9 +430,9 @@ function LiveLearningAssetPanel({
       </p>
       <p className="mt-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Linked skills</p>
       <div className="mt-1 flex flex-wrap gap-2">
-        {asset.linkedSkills.map((s) => (
+        {cleanTextArray(asset.linkedSkills, 12).map((s, idx) => (
           <span
-            key={s}
+            key={`asset-skill-${idx}-${s.slice(0, 32)}`}
             className={dt.skillTag}
           >
             {s}
@@ -453,8 +471,8 @@ function LiveLearningAssetPanel({
           Outline
         </p>
         <ul className="mt-1 list-disc space-y-1 pl-5 text-sm text-slate-300">
-          {asset.outline.map((line) => (
-            <li key={line}>{line}</li>
+          {cleanTextArray(asset.outline, 12).map((line, idx) => (
+            <li key={`asset-outline-${idx}-${line.slice(0, 32)}`}>{line}</li>
           ))}
         </ul>
 
@@ -462,8 +480,8 @@ function LiveLearningAssetPanel({
           Source evidence
         </p>
         <ul className="mt-1 list-none space-y-2 pl-0 text-sm text-slate-300">
-          {asset.sourceEvidence.map((x) => (
-            <EvidenceBullet key={x} line={x} />
+          {cleanTextArray(asset.sourceEvidence, 20).map((x, idx) => (
+            <EvidenceBullet key={`asset-evidence-${idx}-${x.slice(0, 32)}`} line={x} />
           ))}
         </ul>
 
@@ -512,6 +530,7 @@ export default function Home() {
     keySignals?: KeySignalPreview[];
   };
   const [reportPreview, setReportPreview] = useState<ReportPreview | null>(null);
+  const [dashboardReport, setDashboardReport] = useState<DashboardReport | null>(null);
   const [previewSummaryOpen, setPreviewSummaryOpen] = useState(false);
 
   type ManualSnapshotJobs = {
@@ -525,6 +544,7 @@ export default function Home() {
   const [liveJobsPayload, setLiveJobsPayload] = useState<LiveJobIngestionResponse | null>(null);
   const [liveJobsLoading, setLiveJobsLoading] = useState(false);
   const [liveJobsError, setLiveJobsError] = useState<string | null>(null);
+  const [linkedInRefreshRequested, setLinkedInRefreshRequested] = useState(false);
 
   type LinkedInImportedRow = {
     role: string;
@@ -536,6 +556,28 @@ export default function Home() {
     needsReview?: boolean;
   };
   const [importedLinkedInJobs, setImportedLinkedInJobs] = useState<LinkedInImportedRow[]>([]);
+  const visibleImportedLinkedInJobs = useMemo(() => {
+    const isPlaceholderUrl = (u: string | undefined) =>
+      typeof u === "string" && /linkedin\.com\/jobs\/view\/1234567890/i.test(u);
+    const isPlaceholderRow = (r: LinkedInImportedRow) =>
+      r.role === LINKEDIN_PLACEHOLDER_ROLE ||
+      r.company === LINKEDIN_PLACEHOLDER_COMPANY ||
+      r.location === LINKEDIN_PLACEHOLDER_LOCATION;
+    const isInvalidHref = (r: LinkedInImportedRow) => {
+      const href = primaryJobHref(r);
+      if (!href || href === "#") return true;
+      if (isPlaceholderUrl(href)) return true;
+      // Block any href that doesn't pass our apply-url validation.
+      return !isRealJobApplyUrl(href);
+    };
+    return importedLinkedInJobs.filter((r) => {
+      // Hide legacy placeholder-only rows; Gmail-derived LinkedIn jobs now show in Live opportunities.
+      if (isPlaceholderRow(r)) return false;
+      if (isPlaceholderUrl(r.applyUrl) || isPlaceholderUrl(r.sourceUrl)) return false;
+      if (isInvalidHref(r)) return false;
+      return true;
+    });
+  }, [importedLinkedInJobs]);
 
   const [weeklySummary, setWeeklySummary] = useState<WeeklySummaryResult | null>(null);
   const [weeklySummaryLoading, setWeeklySummaryLoading] = useState(false);
@@ -639,118 +681,101 @@ export default function Home() {
     };
   }, [active, lastRefreshedAt]);
 
+  const loadJobsData = useCallback(async (forceLinkedInRefresh = false) => {
+    setLiveJobsLoading(true);
+    setLiveJobsError(null);
+    try {
+      const jobsUrl = forceLinkedInRefresh ? "/api/debug/jobs?linkedinRefresh=1" : "/api/debug/jobs";
+      const [resJobs, resImported] = await Promise.all([
+        fetch(jobsUrl, { cache: "no-store" }),
+        fetch("/api/debug/imported-jobs"),
+      ]);
+      if (!resJobs.ok) throw new Error(`HTTP ${resJobs.status}`);
+      const data = (await resJobs.json()) as LiveJobIngestionResponse;
+      console.log("[jobs] payload", data);
+      setLiveJobsPayload(data);
+      if (resImported.ok) {
+        const imp = (await resImported.json()) as { jobs?: Record<string, unknown>[] };
+        const rows: LinkedInImportedRow[] = (imp.jobs ?? []).map((row) => {
+          const r = row as Record<string, unknown>;
+          const role = String(r.role ?? LINKEDIN_PLACEHOLDER_ROLE);
+          const company = String(r.company ?? LINKEDIN_PLACEHOLDER_COMPANY);
+          const location =
+            typeof r.location === "string" && r.location.trim()
+              ? r.location.trim()
+              : LINKEDIN_PLACEHOLDER_LOCATION;
+          const rawJson =
+            r.raw_json && typeof r.raw_json === "object"
+              ? (r.raw_json as Record<string, unknown>)
+              : null;
+          return {
+            role,
+            company,
+            location,
+            fitScore: typeof r.fit_score === "number" ? r.fit_score : undefined,
+            applyUrl: typeof r.apply_url === "string" ? r.apply_url : undefined,
+            sourceUrl: typeof r.source_url === "string" ? r.source_url : undefined,
+            needsReview: isLinkedInImportIncomplete({
+              role,
+              company,
+              location,
+              raw_json: rawJson,
+            }),
+          };
+        });
+        setImportedLinkedInJobs(rows);
+      } else {
+        setImportedLinkedInJobs([]);
+      }
+      console.log("[jobs] normalized count", (data.opportunities ?? []).length);
+    } catch (e) {
+      setLiveJobsError(e instanceof Error ? e.message : "Failed to load live jobs");
+      setImportedLinkedInJobs([]);
+    } finally {
+      setLiveJobsLoading(false);
+      setLinkedInRefreshRequested(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (active !== "dashboard" && active !== "jobOpportunities") return;
     let cancelled = false;
     void (async () => {
-      setLiveJobsLoading(true);
-      setLiveJobsError(null);
-      try {
-        const [resJobs, resImported] = await Promise.all([
-          fetch("/api/debug/jobs", { cache: "no-store" }),
-          fetch("/api/debug/imported-jobs"),
-        ]);
-        if (!resJobs.ok) throw new Error(`HTTP ${resJobs.status}`);
-        const data = (await resJobs.json()) as LiveJobIngestionResponse;
-        if (!cancelled) setLiveJobsPayload(data);
-        if (resImported.ok) {
-          const imp = (await resImported.json()) as { jobs?: Record<string, unknown>[] };
-          const rows: LinkedInImportedRow[] = (imp.jobs ?? []).map((row) => {
-            const r = row as Record<string, unknown>;
-            const role = String(r.role ?? LINKEDIN_PLACEHOLDER_ROLE);
-            const company = String(r.company ?? LINKEDIN_PLACEHOLDER_COMPANY);
-            const location =
-              typeof r.location === "string" && r.location.trim()
-                ? r.location.trim()
-                : LINKEDIN_PLACEHOLDER_LOCATION;
-            const rawJson =
-              r.raw_json && typeof r.raw_json === "object"
-                ? (r.raw_json as Record<string, unknown>)
-                : null;
-            return {
-              role,
-              company,
-              location,
-              fitScore: typeof r.fit_score === "number" ? r.fit_score : undefined,
-              applyUrl: typeof r.apply_url === "string" ? r.apply_url : undefined,
-              sourceUrl: typeof r.source_url === "string" ? r.source_url : undefined,
-              needsReview: isLinkedInImportIncomplete({
-                role,
-                company,
-                location,
-                raw_json: rawJson,
-              }),
-            };
-          });
-          if (!cancelled) setImportedLinkedInJobs(rows);
-        } else if (!cancelled) {
-          setImportedLinkedInJobs([]);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setLiveJobsError(e instanceof Error ? e.message : "Failed to load live jobs");
-          setImportedLinkedInJobs([]);
-        }
-      } finally {
-        if (!cancelled) setLiveJobsLoading(false);
-      }
+      if (cancelled) return;
+      await loadJobsData(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [active, lastRefreshedAt]);
+  }, [active, lastRefreshedAt, loadJobsData]);
 
   const loadLatestReportPreview = useCallback(async () => {
     try {
-      const res = await fetch("/api/debug/runs", { cache: "no-store" });
-      if (!res.ok) return;
-      const d = (await res.json()) as { runs?: Record<string, unknown>[] };
-      const run = d.runs?.[0];
-      if (!run) {
-        setReportPreview(null);
-        return;
+      const latestRes = await fetch("/api/debug/latest-dashboard-report", { cache: "no-store" });
+      if (!latestRes.ok) return;
+      const d = (await latestRes.json()) as { reportJsonKeys?: string[] } & Record<string, unknown>;
+      // This endpoint derives from the saved run; normalize from its payload if possible.
+      const rep = normalizeDashboardReport(d);
+      if (rep) {
+        setDashboardReport(rep);
+        setLastRefreshedAt(new Date(rep.generatedAt));
+      } else {
+        setDashboardReport(null);
       }
-      const headline = typeof run.headline === "string" ? run.headline : "";
+
+      const headline = typeof d.headline === "string" ? d.headline : "";
       const executiveSummary =
-        typeof run.executive_summary === "string"
-          ? run.executive_summary
-          : typeof run.executiveSummary === "string"
-            ? run.executiveSummary
+        typeof d.executive_summary === "string"
+          ? d.executive_summary
+          : typeof d.executiveSummary === "string"
+            ? d.executiveSummary
             : "";
-      const generatedAt = typeof run.generated_at === "string" ? run.generated_at : null;
+      const generatedAt = typeof d.generated_at === "string" ? d.generated_at : null;
       if (!headline && !executiveSummary) {
         setReportPreview(null);
         return;
       }
-      let keySignals: KeySignalPreview[] | undefined;
-      const rj = run.report_json;
-      if (rj && typeof rj === "object") {
-        const ks = (rj as Record<string, unknown>).keySignals;
-        if (Array.isArray(ks)) {
-          const out: KeySignalPreview[] = [];
-          for (const item of ks) {
-            if (!item || typeof item !== "object") continue;
-            const o = item as Record<string, unknown>;
-            const t = typeof o.title === "string" ? o.title : "";
-            const source =
-              typeof o.source === "string"
-                ? o.source
-                : typeof o.sourceName === "string"
-                  ? o.sourceName
-                  : "";
-            const implication = typeof o.implication === "string" ? o.implication : "";
-            const sourceUrl =
-              typeof o.sourceUrl === "string" && o.sourceUrl.trim()
-                ? o.sourceUrl.trim()
-                : typeof o.url === "string" && o.url.trim()
-                  ? o.url.trim()
-                  : undefined;
-            if (t) out.push({ title: t, source, implication, sourceUrl });
-          }
-          if (out.length) keySignals = out;
-        }
-      }
-      setReportPreview({ headline, executiveSummary, generatedAt, keySignals });
+      setReportPreview({ headline, executiveSummary, generatedAt, keySignals: undefined });
     } catch {
       /* ignore */
     }
@@ -899,6 +924,30 @@ export default function Home() {
     return weeklySummary.totalLiveJobs;
   }, [weeklySummary]);
 
+  const web3AiBriefToShow = useMemo(() => {
+    const rep = dashboardReport?.web3AiBrief;
+    if (rep) {
+      return {
+        title: web3AiBrief.title,
+        headline: rep.headline || web3AiBrief.headline,
+        signals: rep.signals.length > 0 ? rep.signals : web3AiBrief.signals,
+      };
+    }
+    return web3AiBrief;
+  }, [dashboardReport]);
+
+  const hrbpBriefToShow = useMemo(() => {
+    const rep = dashboardReport?.hrbpBrief;
+    if (rep) {
+      return {
+        title: hrbpBrief.title,
+        headline: rep.headline || hrbpBrief.headline,
+        signals: rep.signals.length > 0 ? rep.signals : hrbpBrief.signals,
+      };
+    }
+    return hrbpBrief;
+  }, [dashboardReport]);
+
   async function generateAndSendLatestReport() {
     try {
       const savedSecret = (() => {
@@ -934,12 +983,8 @@ export default function Home() {
       const body = (await res.json().catch(() => ({}))) as {
         status?: string;
         diagnostics?: RunDiagnostics;
-        report?: {
-          headline?: string;
-          executiveSummary?: string;
-          generatedAt?: string;
-          keySignals?: unknown[];
-        };
+        report?: unknown;
+        rawReport?: unknown;
         liveJobs?: WeeklySummaryLiveJob[];
         liveJobsTotalDeduped?: number;
         liveJobsHasMore?: boolean;
@@ -981,43 +1026,18 @@ export default function Home() {
         });
       }
 
-      const rep = body.report;
-      if (rep && typeof rep === "object") {
-        const headline = typeof rep.headline === "string" ? rep.headline : "";
-        const executiveSummary =
-          typeof rep.executiveSummary === "string" ? rep.executiveSummary : "";
-        const generatedAt =
-          typeof rep.generatedAt === "string" ? rep.generatedAt : new Date().toISOString();
-        let keySignals: KeySignalPreview[] | undefined;
-        const ksRaw = rep.keySignals;
-        if (Array.isArray(ksRaw)) {
-          const out: KeySignalPreview[] = [];
-          for (const item of ksRaw) {
-            if (!item || typeof item !== "object") continue;
-            const o = item as Record<string, unknown>;
-            const t = typeof o.title === "string" ? o.title : "";
-            const source =
-              typeof o.source === "string"
-                ? o.source
-                : typeof o.sourceName === "string"
-                  ? o.sourceName
-                  : "";
-            const implication = typeof o.implication === "string" ? o.implication : "";
-            const sourceUrl =
-              typeof o.sourceUrl === "string" && o.sourceUrl.trim()
-                ? o.sourceUrl.trim()
-                : typeof o.url === "string" && o.url.trim()
-                  ? o.url.trim()
-                  : undefined;
-            if (t) out.push({ title: t, source, implication, sourceUrl });
-          }
-          if (out.length) keySignals = out;
-        }
-        setReportPreview({ headline, executiveSummary, generatedAt, keySignals });
-        setPreviewSummaryOpen(false);
+      const nextReport = (body.report ?? body.rawReport) as unknown;
+      const used = body.report != null ? "report" : body.rawReport != null ? "rawReport" : "none";
+      // Safe debug breadcrumb for diagnosing stale fallback rendering.
+      console.log("[dashboard] manual-send-report payload used:", used);
+
+      const rep = normalizeDashboardReport({ report: nextReport });
+      if (rep) {
+        setDashboardReport(rep);
+        setLastRefreshedAt(new Date(rep.generatedAt));
       }
 
-      setLastRefreshedAt(new Date());
+      if (!rep) setLastRefreshedAt(new Date());
       setManualPhase("success");
       void loadLatestReportPreview();
     } catch {
@@ -1235,33 +1255,45 @@ export default function Home() {
 
               <div className="grid gap-6 lg:grid-cols-2">
                 <InfoCard
-                  title={web3AiBrief.title}
+                  title={web3AiBriefToShow.title}
                   subtitle="Operator-facing Web3 × AI signals."
-                  right={<Pill>Updated {formatDateTime(lastRefreshedAt)}</Pill>}
+                  right={
+                    manualSending && manualPhase === "loading" ? (
+                      <Pill>Generating…</Pill>
+                    ) : (
+                      <Pill>Updated {formatDateTime(lastRefreshedAt)}</Pill>
+                    )
+                  }
                   className={dt.cardInsightExtra}
                 >
                   <p className={`text-base font-semibold leading-snug ${dt.textPrimary}`}>
-                    {web3AiBrief.headline}
+                    {web3AiBriefToShow.headline}
                   </p>
                   <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
-                    {web3AiBrief.signals.map((s) => (
-                      <li key={s}>{s}</li>
+                    {cleanTextArray(web3AiBriefToShow.signals, 5).map((s, idx) => (
+                      <li key={`web3ai-${idx}-${s.slice(0, 32)}`}>{s}</li>
                     ))}
                   </ul>
                 </InfoCard>
 
                 <InfoCard
-                  title={hrbpBrief.title}
+                  title={hrbpBriefToShow.title}
                   subtitle="HRBP and people-leadership lens."
-                  right={<Pill>Updated {formatDateTime(lastRefreshedAt)}</Pill>}
+                  right={
+                    manualSending && manualPhase === "loading" ? (
+                      <Pill>Generating…</Pill>
+                    ) : (
+                      <Pill>Updated {formatDateTime(lastRefreshedAt)}</Pill>
+                    )
+                  }
                   className={dt.cardInsightExtra}
                 >
                   <p className={`text-base font-semibold leading-snug ${dt.textPrimary}`}>
-                    {hrbpBrief.headline}
+                    {hrbpBriefToShow.headline}
                   </p>
                   <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
-                    {hrbpBrief.signals.map((s) => (
-                      <li key={s}>{s}</li>
+                    {cleanTextArray(hrbpBriefToShow.signals, 5).map((s, idx) => (
+                      <li key={`hrbp-${idx}-${s.slice(0, 32)}`}>{s}</li>
                     ))}
                   </ul>
                   {(weeklySummary?.sourceExamples ?? []).length > 0 ? (
@@ -1272,8 +1304,8 @@ export default function Home() {
                         View sources
                       </summary>
                       <ul className="mt-3 space-y-2 text-sm">
-                        {(weeklySummary?.sourceExamples ?? []).slice(0, 5).map((ex) => (
-                          <li key={ex.url}>
+                        {(weeklySummary?.sourceExamples ?? []).slice(0, 8).map((ex, idx) => (
+                          <li key={`brief-src-${idx}-${String(ex.url ?? "").slice(0, 32)}`}>
                             <a
                               href={ex.url}
                               target="_blank"
@@ -1296,7 +1328,12 @@ export default function Home() {
                   subtitle="Taxonomy-qualified signals — HRBP view only."
                   className={dt.cardAiModule}
                   right={
-                    weeklySummaryLoading ? (
+                    manualSending && manualPhase === "loading" ? (
+                      <Pill>Generating…</Pill>
+                    ) : dashboardReport?.employmentLaw?.status === "updated" &&
+                        (dashboardReport?.employmentLaw?.items?.length ?? 0) > 0 ? (
+                      <Pill tone="ai">Signals</Pill>
+                    ) : weeklySummaryLoading ? (
                       <Pill>Loading…</Pill>
                     ) : (weeklySummary?.employmentLawSignals?.length ?? 0) > 0 ? (
                       <Pill tone="ai">Signals</Pill>
@@ -1308,11 +1345,35 @@ export default function Home() {
                   <p className={`text-xs leading-relaxed ${dt.muted}`}>
                     Not legal advice. Pure crypto or securities regulation is excluded unless workforce-linked.
                   </p>
-                  {(weeklySummary?.employmentLawSignals?.length ?? 0) > 0 ? (
+                  {((dashboardReport?.employmentLaw?.status === "updated" &&
+                    (dashboardReport?.employmentLaw?.items?.length ?? 0) > 0) ||
+                    (weeklySummary?.employmentLawSignals?.length ?? 0) > 0) ? (
                     <>
                       <ul className="mt-4 list-none space-y-3">
-                        {(weeklySummary?.employmentLawSignals ?? []).slice(0, 3).map((s, idx) => (
-                          <li key={`${s.title}-${idx}`} className={insetCard}>
+                        {(
+                          (dashboardReport?.employmentLaw?.items ?? []).length > 0
+                            ? (dashboardReport?.employmentLaw?.items ?? []).slice(0, 3).map((x, idx) => ({
+                                title: String(x.title ?? "Employment law signal"),
+                                jurisdiction: "",
+                                lawTheme: "",
+                                whyItQualifies: "",
+                                hrbpImplication: "",
+                                suggestedAction: "",
+                                url: typeof x.url === "string" ? x.url : "",
+                                key: `law-${idx}-${String(x.url ?? "").slice(0, 32)}`,
+                              }))
+                            : (weeklySummary?.employmentLawSignals ?? []).slice(0, 3).map((s, idx) => ({
+                                title: s.title,
+                                jurisdiction: s.jurisdiction ?? "",
+                                lawTheme: s.lawTheme ?? "",
+                                whyItQualifies: s.whyItQualifies ?? "",
+                                hrbpImplication: s.hrbpImplication ?? "",
+                                suggestedAction: s.suggestedAction ?? "",
+                                url: s.url ?? "",
+                                key: `wk-${idx}-${String(s.url ?? "")}`,
+                              }))
+                        ).map((s) => (
+                          <li key={s.key} className={insetCard}>
                             <p className={`text-sm font-semibold ${dt.textPrimary}`}>{s.title}</p>
                             {(s.jurisdiction || s.lawTheme) && (
                               <p className={`mt-1 text-[11px] uppercase tracking-wide ${dt.muted}`}>
@@ -1347,7 +1408,8 @@ export default function Home() {
                           </li>
                         ))}
                       </ul>
-                      {(weeklySummary?.employmentLawSignals ?? []).some((s) => s.url) ? (
+                      {(dashboardReport?.employmentLaw?.items ?? []).some((x) => typeof x.url === "string" && x.url) ||
+                      (weeklySummary?.employmentLawSignals ?? []).some((s) => s.url) ? (
                         <details className="mt-4 rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-950/35 p-3">
                           <summary
                             className={`cursor-pointer text-sm font-semibold ${dt.accentText} hover:underline`}
@@ -1355,21 +1417,28 @@ export default function Home() {
                             View sources
                           </summary>
                           <ul className="mt-3 space-y-2 text-sm">
-                            {(weeklySummary?.employmentLawSignals ?? [])
-                              .slice(0, 3)
-                              .filter((s) => s.url)
-                              .map((s) => (
-                                <li key={s.url}>
-                                  <a
-                                    href={s.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className={`font-medium ${dt.accentText} ${dt.accentTextHover} underline-offset-2 hover:underline`}
-                                  >
-                                    {s.title}
-                                  </a>
-                                </li>
-                              ))}
+                            {(
+                              (dashboardReport?.employmentLaw?.items ?? []).length > 0
+                                ? (dashboardReport?.employmentLaw?.items ?? [])
+                                    .slice(0, 5)
+                                    .filter((x) => typeof x.url === "string" && x.url)
+                                    .map((x) => ({ url: String(x.url), title: String(x.title ?? "Source") }))
+                                : (weeklySummary?.employmentLawSignals ?? [])
+                                    .slice(0, 5)
+                                    .filter((s) => s.url)
+                                    .map((s) => ({ url: String(s.url), title: s.title }))
+                            ).map((s, idx) => (
+                              <li key={`law-src-${idx}-${s.url.slice(0, 32)}`}>
+                                <a
+                                  href={s.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`font-medium ${dt.accentText} ${dt.accentTextHover} underline-offset-2 hover:underline`}
+                                >
+                                  {s.title}
+                                </a>
+                              </li>
+                            ))}
                           </ul>
                         </details>
                       ) : null}
@@ -1386,7 +1455,15 @@ export default function Home() {
                   subtitle="Taxonomy-qualified expansion, headcount, and restructuring — workforce planning."
                   className={dt.cardAiModule}
                   right={
-                    weeklySummaryLoading ? (
+                    manualSending && manualPhase === "loading" ? (
+                      <Pill>Generating…</Pill>
+                    ) : (dashboardReport?.expansionDownsizing &&
+                        (dashboardReport.expansionDownsizing.expansionCount +
+                          dashboardReport.expansionDownsizing.downsizingCount +
+                          dashboardReport.expansionDownsizing.restructuringCount >
+                          0)) ? (
+                      <Pill tone="ai">Snapshot</Pill>
+                    ) : weeklySummaryLoading ? (
                       <Pill>Loading…</Pill>
                     ) : (weeklySummary?.expansionSignalCount ?? 0) +
                           (weeklySummary?.downsizingSignalCount ?? 0) +
@@ -1399,13 +1476,20 @@ export default function Home() {
                   }
                 >
                   <p className={`text-sm leading-relaxed ${dt.textPrimary}`}>
-                    {weeklySummary?.expansionVsDownsizingTrend ??
+                    {dashboardReport?.expansionDownsizing?.peopleImplication?.trim() ||
+                      weeklySummary?.expansionVsDownsizingTrend ||
                       "Run intelligence to populate expansion vs downsizing heuristics."}
                   </p>
-                  {(weeklySummary?.expansionSignalCount ?? 0) +
-                    (weeklySummary?.downsizingSignalCount ?? 0) +
-                    (weeklySummary?.restructuringSignalCount ?? 0) ===
-                  0 ? (
+                  {((dashboardReport?.expansionDownsizing &&
+                    dashboardReport.expansionDownsizing.expansionCount +
+                      dashboardReport.expansionDownsizing.downsizingCount +
+                      dashboardReport.expansionDownsizing.restructuringCount ===
+                      0) ||
+                    (!dashboardReport?.expansionDownsizing &&
+                      (weeklySummary?.expansionSignalCount ?? 0) +
+                        (weeklySummary?.downsizingSignalCount ?? 0) +
+                        (weeklySummary?.restructuringSignalCount ?? 0) ===
+                        0)) ? (
                     <p className={`mt-3 text-sm ${dt.muted}`}>
                       No qualified workforce expansion or downsizing signal found in current run.
                     </p>
@@ -1416,7 +1500,8 @@ export default function Home() {
                         Expansion
                       </p>
                       <p className={`mt-1 ${dt.metricValue}`}>
-                        {weeklySummary?.expansionSignalCount ??
+                        {dashboardReport?.expansionDownsizing?.expansionCount ??
+                          weeklySummary?.expansionSignalCount ??
                           weeklySummary?.expansionSignals?.length ??
                           0}
                       </p>
@@ -1426,7 +1511,8 @@ export default function Home() {
                         Downsizing
                       </p>
                       <p className={`mt-1 ${dt.metricValue}`}>
-                        {weeklySummary?.downsizingSignalCount ??
+                        {dashboardReport?.expansionDownsizing?.downsizingCount ??
+                          weeklySummary?.downsizingSignalCount ??
                           weeklySummary?.downsizingSignals?.length ??
                           0}
                       </p>
@@ -1436,7 +1522,8 @@ export default function Home() {
                         Restructuring
                       </p>
                       <p className={`mt-1 ${dt.metricValue}`}>
-                        {weeklySummary?.restructuringSignalCount ??
+                        {dashboardReport?.expansionDownsizing?.restructuringCount ??
+                          weeklySummary?.restructuringSignalCount ??
                           weeklySummary?.restructuringSignals?.length ??
                           0}
                       </p>
@@ -1666,8 +1753,8 @@ export default function Home() {
                           Top themes
                         </p>
                         <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-slate-300">
-                          {weeklySummary.topThemes.slice(0, 5).map((t) => (
-                            <li key={t.theme}>
+                          {weeklySummary.topThemes.slice(0, 5).map((t, idx) => (
+                            <li key={`theme-${idx}-${t.theme.slice(0, 32)}`}>
                               <span className="font-medium text-slate-200">{t.theme}</span>
                               <span className={`${dt.muted}`}> — {t.count}</span>
                             </li>
@@ -1682,8 +1769,8 @@ export default function Home() {
                           Repeated companies
                         </p>
                         <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-slate-300">
-                          {weeklySummary.repeatedCompanies.slice(0, 3).map((c) => (
-                            <li key={c.company}>
+                          {weeklySummary.repeatedCompanies.slice(0, 3).map((c, idx) => (
+                            <li key={`repeatco-${idx}-${c.company.slice(0, 32)}`}>
                               <span className="font-medium text-slate-200">{c.company}</span>
                               <span className={`${dt.muted}`}> — {c.count}×</span>
                             </li>
@@ -1702,8 +1789,8 @@ export default function Home() {
                           View source examples
                         </summary>
                         <ul className="mt-3 space-y-2 text-sm">
-                          {(weeklySummary.sourceExamples ?? []).slice(0, 5).map((ex) => (
-                            <li key={ex.url}>
+                          {(weeklySummary.sourceExamples ?? []).slice(0, 5).map((ex, idx) => (
+                            <li key={`weekly-src-ex-${idx}-${String(ex.url ?? "").slice(0, 32)}`}>
                               <a
                                 href={ex.url}
                                 target="_blank"
@@ -1722,8 +1809,8 @@ export default function Home() {
                         Recommended learning focus
                       </p>
                       <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-slate-300">
-                        {weeklySummary.recommendedLearningFocus.slice(0, 3).map((line) => (
-                          <li key={line}>{line}</li>
+                        {cleanTextArray(weeklySummary.recommendedLearningFocus.slice(0, 6), 3).map((line, idx) => (
+                          <li key={`weekly-learn-${idx}-${line.slice(0, 32)}`}>{line}</li>
                         ))}
                       </ul>
                     </div>
@@ -1732,8 +1819,8 @@ export default function Home() {
                         Suggested next actions
                       </p>
                       <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-slate-300">
-                        {weeklySummary.suggestedNextActions.slice(0, 3).map((line) => (
-                          <li key={line}>{line}</li>
+                        {cleanTextArray(weeklySummary.suggestedNextActions.slice(0, 6), 3).map((line, idx) => (
+                          <li key={`weekly-action-${idx}-${line.slice(0, 32)}`}>{line}</li>
                         ))}
                       </ul>
                     </div>
@@ -1913,6 +2000,7 @@ export default function Home() {
                                 <p className="mt-1 text-xs text-slate-400">{opp.company || "—"}</p>
                               </div>
                               <div className="flex items-center gap-2">
+                                {opp.needsLinkedInReview ? <Pill tone="warning">Needs Review</Pill> : null}
                                 <Pill className={dt.pillFit}>
                                   {typeof opp.fitScore === "number" ? `${opp.fitScore}/100` : "—"} fit
                                 </Pill>
@@ -1934,7 +2022,7 @@ export default function Home() {
                                 ) : null}
                                 {opp.needsLinkedInReview ? (
                                   <p className="mt-2 text-xs leading-relaxed text-amber-200/90">
-                                    Imported from LinkedIn alert; verify details in listing.
+                                    Open LinkedIn to verify role, employer and location before applying.
                                   </p>
                                 ) : null}
                                 <div className="mt-3">
@@ -1988,6 +2076,17 @@ export default function Home() {
                 }
                 right={
                   <div className="flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLinkedInRefreshRequested(true);
+                        void loadJobsData(true);
+                      }}
+                      disabled={liveJobsLoading}
+                      className={`rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-900/60 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800/70 disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      Refresh LinkedIn
+                    </button>
                     {liveJobsLoading ? <Pill>Loading…</Pill> : null}
                     {(liveJobsPayload?.opportunities.length ?? 0) > 0 ? (
                       <Pill tone="success">Live</Pill>
@@ -1997,6 +2096,18 @@ export default function Home() {
                   </div>
                 }
               />
+
+              {liveJobsPayload?.linkedInCache?.isRefreshing &&
+              !liveJobsPayload?.linkedInCache?.hasCachedValue ? (
+                <p className={`text-sm ${dt.muted}`}>Loading latest LinkedIn opportunities...</p>
+              ) : null}
+              {liveJobsPayload?.linkedInCache?.lastUpdatedAt ? (
+                <p className={`text-xs ${dt.muted}`}>
+                  Last updated at {new Date(liveJobsPayload.linkedInCache.lastUpdatedAt).toLocaleString()}
+                  {liveJobsPayload.linkedInCache.isRefreshing ? " · Refreshing in background" : ""}
+                  {linkedInRefreshRequested ? " · Manual refresh requested" : ""}
+                </p>
+              ) : null}
 
               <p className={`max-w-3xl text-sm leading-relaxed ${dt.muted}`}>
                 Fit score reflects role relevance, industry match, target location, seniority and application
@@ -2070,13 +2181,13 @@ export default function Home() {
                             </p>
                             {opp.needsLinkedInReview ? (
                               <p className="mt-1.5 text-xs leading-relaxed text-amber-200/90">
-                                Imported from LinkedIn alert; verify details in listing.
+                                Open LinkedIn to verify role, employer and location before applying.
                               </p>
                             ) : null}
                           </div>
                           <div className="flex flex-shrink-0 flex-col items-end gap-1.5">
                             {opp.needsLinkedInReview ? (
-                              <Pill tone="warning">Needs review</Pill>
+                              <Pill tone="warning">Needs Review</Pill>
                             ) : null}
                             <Pill className={dt.pillFit}>{opp.fitScore}/100 fit</Pill>
                           </div>
@@ -2106,8 +2217,8 @@ export default function Home() {
                                 Gaps
                               </p>
                               <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-300">
-                                {opp.gaps.map((gap) => (
-                                  <li key={gap}>{gap}</li>
+                                {cleanTextArray(opp.gaps, 12).map((gap, idx) => (
+                                  <li key={`opp-gap-${idx}-${gap.slice(0, 32)}`}>{gap}</li>
                                 ))}
                               </ul>
                             </div>
@@ -2126,21 +2237,16 @@ export default function Home() {
                 </InfoCard>
               ) : null}
 
-              <InfoCard
-                title="LinkedIn Job Alerts"
-                subtitle="Imported from Hotmail / Outlook via Power Automate — SWIFT does not scrape LinkedIn."
-                className={dt.cardAiModule}
-                right={<Pill tone="ai">{importedLinkedInJobs.length} saved</Pill>}
-              >
-                {importedLinkedInJobs.length === 0 ? (
-                  <p className={`text-sm ${dt.muted}`}>
-                    No LinkedIn alert rows in Supabase yet. POST job alert payloads to{" "}
-                    <code className="text-slate-400">/api/job-alert-ingest</code> from Power Automate.
-                  </p>
-                ) : (
+              {visibleImportedLinkedInJobs.length > 0 ? (
+                <InfoCard
+                  title="LinkedIn Job Alerts"
+                  subtitle="Imported from Hotmail / Outlook via Power Automate — SWIFT does not scrape LinkedIn."
+                  className={dt.cardAiModule}
+                  right={<Pill tone="ai">{visibleImportedLinkedInJobs.length} saved</Pill>}
+                >
                   <div className="space-y-3">
                     <ul className="space-y-3">
-                      {importedLinkedInJobs.slice(0, 5).map((row, idx) => {
+                      {visibleImportedLinkedInJobs.slice(0, 5).map((row, idx) => {
                         const href = primaryJobHref(row);
                         return (
                           <li key={`${row.role}-${row.company}-${idx}`} className={insetCard}>
@@ -2180,15 +2286,15 @@ export default function Home() {
                         );
                       })}
                     </ul>
-                    {importedLinkedInJobs.length > 5 ? (
+                    {visibleImportedLinkedInJobs.length > 5 ? (
                       <details className="rounded-lg border border-[color:var(--swift-border-subtle)] bg-slate-950/35 p-3">
                         <summary
                           className={`cursor-pointer text-sm font-semibold ${dt.accentText} hover:underline`}
                         >
-                          View all LinkedIn imports ({importedLinkedInJobs.length})
+                          View all LinkedIn imports ({visibleImportedLinkedInJobs.length})
                         </summary>
                         <ul className="mt-3 max-h-[min(22rem,50vh)] space-y-2 overflow-y-auto pr-1">
-                          {importedLinkedInJobs.slice(5).map((row, idx) => (
+                          {visibleImportedLinkedInJobs.slice(5).map((row, idx) => (
                             <li key={`li-more-${idx}`} className="text-sm">
                               <a
                                 href={primaryJobHref(row)}
@@ -2204,8 +2310,8 @@ export default function Home() {
                       </details>
                     ) : null}
                   </div>
-                )}
-              </InfoCard>
+                </InfoCard>
+              ) : null}
             </div>
           ) : null}
 
@@ -2405,8 +2511,8 @@ export default function Home() {
                       "Role matching",
                       "Weekly trends",
                       "Saved history",
-                    ].map((x) => (
-                      <Pill key={x}>{x}</Pill>
+                    ].map((x, idx) => (
+                      <Pill key={`about-pill-${idx}-${x.slice(0, 32)}`}>{x}</Pill>
                     ))}
                   </div>
                 </div>
