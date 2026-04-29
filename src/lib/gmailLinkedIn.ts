@@ -12,6 +12,83 @@ export type LinkedInJobEmail = {
   primaryUrl?: string;
 };
 
+export type LinkedInImapDiagnostics = {
+  stage: "connect" | "authenticate" | "mailboxOpen" | "search" | "fetch" | "logout" | "unknown";
+  errorName?: string;
+  errorMessage?: string;
+  errorStack?: string;
+  response?: unknown;
+  responseStatus?: unknown;
+  serverResponseCode?: unknown;
+  executedCommand?: string;
+  responseText?: unknown;
+  authenticationFailed?: boolean;
+  code?: unknown;
+  errno?: unknown;
+  syscall?: unknown;
+  hostname?: string;
+  command?: string;
+  mailbox?: string;
+  imapHost?: string;
+  envPresent?: {
+    GMAIL_USER: boolean;
+    GMAIL_APP_PASSWORD: boolean;
+  };
+};
+
+function firstThreeStackLines(stack: unknown): string | undefined {
+  if (!stack) return undefined;
+  const s = String(stack);
+  const lines = s.split("\n").map((l) => l.trimEnd());
+  if (lines.length <= 3) return lines.join("\n");
+  return lines.slice(0, 3).join("\n");
+}
+
+function buildImapDiagnostics(args: {
+  stage: LinkedInImapDiagnostics["stage"];
+  error: unknown;
+  label: string;
+  imapHost: string;
+}): LinkedInImapDiagnostics {
+  const anyErr = args.error as any;
+  const missingUser = !process.env.GMAIL_USER || !String(process.env.GMAIL_USER).trim();
+  const missingPass = !process.env.GMAIL_APP_PASSWORD || !String(process.env.GMAIL_APP_PASSWORD).trim();
+
+  const diag: LinkedInImapDiagnostics = {
+    stage: args.stage,
+    errorName: anyErr?.name,
+    errorMessage: anyErr?.message ? String(anyErr.message) : String(args.error),
+    errorStack: firstThreeStackLines(anyErr?.stack),
+    response: anyErr?.response,
+    responseStatus: anyErr?.responseStatus,
+    serverResponseCode: anyErr?.serverResponseCode,
+    executedCommand: anyErr?.executedCommand,
+    responseText: anyErr?.responseText ?? anyErr?.response?.text,
+    authenticationFailed: anyErr?.authenticationFailed,
+    code: anyErr?.code,
+    errno: anyErr?.errno,
+    syscall: anyErr?.syscall,
+    hostname: anyErr?.hostname ?? anyErr?.imap?.hostname,
+    command: anyErr?.command ?? anyErr?.imap?.command,
+    mailbox: args.label,
+    imapHost: args.imapHost,
+    envPresent: {
+      GMAIL_USER: !missingUser,
+      GMAIL_APP_PASSWORD: !missingPass,
+    },
+  };
+
+  // Heuristic: distinguish connect vs authenticate when possible.
+  if (diag.stage === "connect") {
+    const msg = (diag.errorMessage ?? "").toLowerCase();
+    if (msg.includes("auth") || msg.includes("authentication") || msg.includes("login")) {
+      diag.stage = "authenticate";
+    }
+  }
+
+  return diag;
+}
+
 export function decodeEmailUrlText(input: string): string {
   return (
     input
@@ -135,6 +212,7 @@ export async function fetchLinkedInJobAlertEmails(options?: {
   const user = process.env.GMAIL_USER;
   const pass = process.env.GMAIL_APP_PASSWORD;
   const label = process.env.GMAIL_LINKEDIN_LABEL || "SWIFT";
+      const imapHost = "imap.gmail.com";
 
   if (!user || !pass) {
     const missing = [
@@ -143,13 +221,21 @@ export async function fetchLinkedInJobAlertEmails(options?: {
     ].filter((x): x is string => Boolean(x));
     console.warn(`[GMAIL_LINKEDIN] missing required env vars: ${missing.join(", ")}`);
     if (options?.throwOnError) {
-      throw new Error(`Missing required Gmail env vars: ${missing.join(", ")}`);
+          const diag = buildImapDiagnostics({
+            stage: "authenticate",
+            error: new Error(`Missing required Gmail env vars: ${missing.join(", ")}`),
+            label,
+            imapHost,
+          });
+          const err = new Error("Missing required Gmail env vars");
+          (err as any).imapDiagnostics = diag;
+          throw err;
     }
     return [];
   }
 
   const client = new ImapFlow({
-    host: "imap.gmail.com",
+        host: imapHost,
     port: 993,
     secure: true,
     auth: {
@@ -160,13 +246,31 @@ export async function fetchLinkedInJobAlertEmails(options?: {
 
   const results: LinkedInJobEmail[] = [];
   let mailboxLock: Awaited<ReturnType<ImapFlow["getMailboxLock"]>> | null = null;
+      let primaryError: unknown = null;
+      let primaryStage: LinkedInImapDiagnostics["stage"] = "unknown";
 
   try {
     console.info(`[GMAIL_LINKEDIN] opening IMAP connection label="${label}"`);
-    await client.connect();
-    mailboxLock = await client.getMailboxLock(label);
+        try {
+          primaryStage = "connect";
+          await client.connect();
+        } catch (error) {
+          primaryError = error;
+          primaryStage = "connect";
+          throw error;
+        }
+
+        try {
+          primaryStage = "mailboxOpen";
+          mailboxLock = await client.getMailboxLock(label);
+        } catch (error) {
+          primaryError = error;
+          primaryStage = "mailboxOpen";
+          throw error;
+        }
 
     try {
+          primaryStage = "fetch";
       const messages = client.fetch(
         {
           since: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7),
@@ -218,22 +322,45 @@ export async function fetchLinkedInJobAlertEmails(options?: {
     console.info(`[GMAIL_LINKEDIN] IMAP fetch succeeded count=${results.length}`);
     return results.slice(0, 10);
   } catch (error) {
-    console.error("[GMAIL_LINKEDIN] IMAP fetch failed:", error);
-    if (options?.throwOnError) throw error;
+        const diag = buildImapDiagnostics({
+          stage: primaryStage ?? "unknown",
+          error,
+          label,
+          imapHost,
+        });
+        console.error("[GMAIL_LINKEDIN] IMAP fetch failed", { stage: diag.stage, errorMessage: diag.errorMessage });
+        if (options?.throwOnError) {
+          const err = error instanceof Error ? error : new Error(diag.errorMessage ?? "Command failed");
+          (err as any).imapDiagnostics = diag;
+          throw err;
+        }
     return [];
   } finally {
     if (mailboxLock) {
       try {
-        mailboxLock.release();
+        (mailboxLock as any).release();
       } catch {
         // ignore lock release errors
       }
     }
     try {
+          // Only report logout failure when we didn't already fail during connect/auth/mailboxOpen/fetch.
+          primaryStage = primaryError ? primaryStage : "logout";
       await client.logout();
       console.info("[GMAIL_LINKEDIN] IMAP connection closed");
     } catch {
       console.warn("[GMAIL_LINKEDIN] IMAP close failed");
+          if (!primaryError && options?.throwOnError) {
+            const diag = buildImapDiagnostics({
+              stage: "logout",
+              error: new Error("IMAP logout failed"),
+              label,
+              imapHost,
+            });
+            const err = new Error(diag.errorMessage ?? "IMAP logout failed");
+            (err as any).imapDiagnostics = diag;
+            throw err;
+          }
     }
   }
     },

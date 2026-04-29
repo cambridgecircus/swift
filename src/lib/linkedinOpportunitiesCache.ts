@@ -1,4 +1,4 @@
-import { fetchLinkedInJobAlertEmails, type LinkedInJobEmail } from "@/lib/gmailLinkedIn";
+import { fetchLinkedInJobAlertEmails, type LinkedInImapDiagnostics, type LinkedInJobEmail } from "@/lib/gmailLinkedIn";
 
 const LINKEDIN_CACHE_TTL_MS = 20 * 60 * 1000;
 
@@ -16,6 +16,7 @@ export type LinkedInCacheMeta = {
   lastUpdatedAt: string | null;
   ttlMs: number;
   error?: string;
+  errorDiagnostics?: LinkedInImapDiagnostics;
 };
 
 let cacheState: LinkedInCacheState | null = null;
@@ -101,10 +102,19 @@ export async function getLinkedInJobEmailsCached(options?: {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Manual refresh failed";
-      console.error("[LINKEDIN_CACHE] manual refresh failed", error);
+      const diag = (error as any)?.imapDiagnostics as LinkedInImapDiagnostics | undefined;
+      if (diag) {
+        console.error("[LINKEDIN_CACHE] manual refresh failed diagnostics", diag);
+      } else {
+        console.error("[LINKEDIN_CACHE] manual refresh failed", error);
+      }
       return {
         emails: cacheState?.emails ?? [],
-        meta: { ...cacheMeta(cacheState ? "cache_expired" : "cache_miss"), error: message },
+        meta: {
+          ...cacheMeta(cacheState ? "cache_expired" : "cache_miss"),
+          error: message,
+          errorDiagnostics: diag,
+        },
       };
     }
   }

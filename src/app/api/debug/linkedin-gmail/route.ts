@@ -15,11 +15,15 @@ export async function GET(request: Request) {
   });
 
   if (forceRefresh && meta.error) {
+    if (meta.errorDiagnostics) {
+      console.error("[LINKEDIN_GMAIL] Gmail refresh failed with diagnostics", meta.errorDiagnostics);
+    }
     return NextResponse.json(
       {
         ok: false,
         error: meta.error,
         linkedInCache: { ...meta, forceRefresh },
+        imapDiagnostics: meta.errorDiagnostics,
         count: emails.length,
         emails: [],
       },

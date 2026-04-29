@@ -168,6 +168,7 @@ export async function GET(request: Request) {
   if (forceLinkedInRefresh && linkedInCached.meta.error) {
     console.error("[LINKEDIN_JOBS] Gmail refresh failed (returning non-LinkedIn jobs)", {
       error: linkedInCached.meta.error,
+      imapDiagnostics: linkedInCached.meta.errorDiagnostics,
     });
   }
   const gmailEmails = linkedInCached.emails;
@@ -273,6 +274,7 @@ export async function GET(request: Request) {
         ...linkedInCached.meta,
         forceRefresh: forceLinkedInRefresh,
       },
+      imapDiagnostics: linkedInCached.meta.errorDiagnostics,
     });
   }
   try {
