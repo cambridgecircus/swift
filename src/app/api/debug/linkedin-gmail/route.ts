@@ -6,7 +6,23 @@ export async function GET(request: Request) {
   const forceRefresh = ["1", "true", "yes"].includes(
     (url.searchParams.get("refresh") ?? "").toLowerCase(),
   );
-  const { emails, meta } = await getLinkedInJobEmailsCached({ forceRefresh });
+  const { emails, meta } = await getLinkedInJobEmailsCached({
+    forceRefresh,
+    awaitRefresh: forceRefresh,
+  });
+
+  if (forceRefresh && meta.error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: meta.error,
+        linkedInCache: { ...meta, forceRefresh },
+        count: emails.length,
+        emails: [],
+      },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({
     ok: true,

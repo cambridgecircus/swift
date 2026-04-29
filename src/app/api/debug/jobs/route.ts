@@ -160,7 +160,22 @@ export async function GET(request: Request) {
   });
   const linkedInCached = await getLinkedInJobEmailsCached({
     forceRefresh: forceLinkedInRefresh,
+    awaitRefresh: forceLinkedInRefresh,
   });
+  if (forceLinkedInRefresh && linkedInCached.meta.error) {
+    return jsonResponseNoStore(
+      {
+        ok: false,
+        message: "LinkedIn Gmail refresh failed",
+        error: linkedInCached.meta.error,
+        linkedInCache: {
+          ...linkedInCached.meta,
+          forceRefresh: forceLinkedInRefresh,
+        },
+      },
+      { status: 500 },
+    );
+  }
   const gmailEmails = linkedInCached.emails;
   const gmailUrls = (gmailEmails ?? [])
     .flatMap((e) => (Array.isArray(e.urls) ? e.urls : []))

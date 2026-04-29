@@ -124,7 +124,9 @@ function dedupe(urls: string[]): string[] {
   return out;
 }
 
-export async function fetchLinkedInJobAlertEmails(): Promise<LinkedInJobEmail[]> {
+export async function fetchLinkedInJobAlertEmails(options?: {
+  throwOnError?: boolean;
+}): Promise<LinkedInJobEmail[]> {
   return runGuardedFetch<LinkedInJobEmail[]>({
     key: "gmail-linkedin-job-alerts",
     fallback: () => [],
@@ -135,7 +137,14 @@ export async function fetchLinkedInJobAlertEmails(): Promise<LinkedInJobEmail[]>
   const label = process.env.GMAIL_LINKEDIN_LABEL || "SWIFT";
 
   if (!user || !pass) {
-    console.warn("Gmail credentials are missing. Skipping LinkedIn job alert fetch.");
+    const missing = [
+      !user ? "GMAIL_USER" : null,
+      !pass ? "GMAIL_APP_PASSWORD" : null,
+    ].filter((x): x is string => Boolean(x));
+    console.warn(`[GMAIL_LINKEDIN] missing required env vars: ${missing.join(", ")}`);
+    if (options?.throwOnError) {
+      throw new Error(`Missing required Gmail env vars: ${missing.join(", ")}`);
+    }
     return [];
   }
 
@@ -153,7 +162,7 @@ export async function fetchLinkedInJobAlertEmails(): Promise<LinkedInJobEmail[]>
   let mailboxLock: Awaited<ReturnType<ImapFlow["getMailboxLock"]>> | null = null;
 
   try {
-    console.info(`[GMAIL_LINKEDIN] opening IMAP connection label="${label}" user="${user}"`);
+    console.info(`[GMAIL_LINKEDIN] opening IMAP connection label="${label}"`);
     await client.connect();
     mailboxLock = await client.getMailboxLock(label);
 
@@ -210,6 +219,7 @@ export async function fetchLinkedInJobAlertEmails(): Promise<LinkedInJobEmail[]>
     return results.slice(0, 10);
   } catch (error) {
     console.error("[GMAIL_LINKEDIN] IMAP fetch failed:", error);
+    if (options?.throwOnError) throw error;
     return [];
   } finally {
     if (mailboxLock) {
