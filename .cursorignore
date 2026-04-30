@@ -1,0 +1,22 @@
+# Do not expose local secrets to Cursor AI
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.crt
+*.cert
+id_rsa
+id_ed25519
+*.secret
+secrets.*
+credentials.*
+
+# Personal folders
+/Users/*/Desktop/
+/Users/*/Documents/
+/Users/*/Downloads/
+/Users/*/Library/
+/Users/*/.ssh/
+/Users/*/.config/
+/Users/*/.aws/
