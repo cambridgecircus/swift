@@ -1,4 +1,4 @@
-import { generateGeoAiDailyBrief } from "@/lib/geoAiDailyBrief";
+import { generateSwiftIntelligenceReport } from "@/lib/swiftIntelligenceReport";
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -15,14 +15,18 @@ export async function GET(request: Request) {
     return Response.json({ status: "error", message: "Unauthorized" }, { status: 401 });
   }
 
-  const result = await generateGeoAiDailyBrief();
+  const result = await generateSwiftIntelligenceReport({ source: "daily", sendEmail: true });
 
   return Response.json({
     status: "ok",
     ok: true,
-    message: result.empty ? "No recent digest emails found." : "GEO x AI Daily Brief generated.",
-    report: result.brief,
-    empty: result.empty === true,
+    message: "Daily report generated and email attempted successfully.",
+    report: result.dashboardReport,
+    rawReport: result.report,
     storage: result.storage,
+    emailStatus: result.emailStatus,
+    emailMessageId: result.emailMessageId,
+    triageUsed: result.triageUsed,
+    gmailIntelDiagnostics: result.gmailIntelDiagnostics ?? null,
   });
 }
