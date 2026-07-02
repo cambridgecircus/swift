@@ -35,3 +35,28 @@ The easiest way to deploy your Next.js app is to use the [Vercel Platform](https
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
 # swift
+
+## GEO x AI Daily Brief
+
+The dashboard generates the GEO x AI Daily Brief from recent Gmail messages under:
+
+`Daily Career Intel Digest for ChatGPT`
+
+Required Vercel environment variables:
+
+- `DEEPSEEK_API_KEY`
+- `GMAIL_USER`
+- `GMAIL_APP_PASSWORD`
+- `GMAIL_LABEL_NAME=Daily Career Intel Digest for ChatGPT`
+- `CRON_SECRET`
+
+Optional environment variables:
+
+- `DEEPSEEK_BASE_URL` if using a custom DeepSeek-compatible base URL
+- `AI_PROVIDER=deepseek`
+- `AI_MODEL`
+- `AI_BASE_URL`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+When Supabase is configured, briefs are saved to the existing `swift_runs` storage pattern. Without Supabase, the refresh endpoint still returns the generated brief directly.

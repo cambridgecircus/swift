@@ -18,7 +18,11 @@ function getAiConfig() {
     return {
       provider,
       apiKey: process.env.DEEPSEEK_API_KEY?.trim(),
-      baseUrl: (process.env.AI_BASE_URL?.trim() || "https://api.deepseek.com").replace(/\/+$/, ""),
+      baseUrl: (
+        process.env.AI_BASE_URL?.trim() ||
+        process.env.DEEPSEEK_BASE_URL?.trim() ||
+        "https://api.deepseek.com"
+      ).replace(/\/+$/, ""),
       model: process.env.AI_MODEL?.trim() || "deepseek-chat",
     };
   }
