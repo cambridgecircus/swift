@@ -213,6 +213,19 @@ function capDisplayText(input: string | null | undefined, maxLength = 1500) {
   return `${text.slice(0, maxLength).trim().replace(/[,:;.-]+$/g, "")}...`;
 }
 
+function containsAlertBooleanQuery(input: string | null | undefined) {
+  const text = String(input || "");
+  const orCount = (text.toUpperCase().match(/\bOR\b/g) || []).length;
+  const quotedPhraseCount = (text.match(/"[^"]{3,80}"/g) || []).length;
+  return (
+    orCount >= 3 &&
+    quotedPhraseCount >= 3 &&
+    /geo|aeo|ai search|ai visibility|llm visibility|google ai overviews|chatgpt search|perplexity|semrush/i.test(
+      text,
+    )
+  );
+}
+
 function sourceDomain(url: string) {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -253,32 +266,32 @@ function sourceReferenceText(brief: GeoAiDailyBrief) {
   const refs = compactBriefSources(brief)
     .slice(0, 3)
     .map((source) => `${source.title} (${source.publisher || source.domain})`);
-  return refs.length ? refs.join("; ") : "the latest CareerIntel/Market Google Alert sources";
+  return refs.length ? refs.join("; ") : "the clean article sources available today";
 }
 
 function briefFallbackSections(brief: GeoAiDailyBrief): Record<GeoBriefSectionKey, string> {
-  const alertSubject = brief.gmailDebug?.latestGoogleAlertSubject || "today's CareerIntel/Market Google Alert";
   const sourceRefs = sourceReferenceText(brief);
   return {
     executiveSignal:
-      "Today's CareerIntel/Market Google Alert shows continued market activity around GEO, AEO, AI search visibility, and brand discoverability. The signal is that AI visibility is becoming a mainstream marketing and GTM category rather than a niche SEO topic.",
+      "Today's GEO market signal is that AI visibility is continuing to move from thought-leadership language into agency services, measurement frameworks, and brand-discoverability products.",
     whatHappenedToday:
-      `Several sources in ${alertSubject} referenced GEO, AI search visibility, brand visibility, and related vendor/activity signals. Top referenced sources include: ${sourceRefs}.`,
+      `Today's source set surfaced several GEO and AI search visibility items, including ${sourceRefs}. The common thread is that vendors and agencies are packaging AI visibility as a measurable marketing capability.`,
     whyItMattersForSemrushAdobe:
-      "This matters for Semrush and Adobe because the market is moving from classic SEO measurement toward AI visibility, answer-engine visibility, and brand discoverability across AI search experiences. Semrush has an opportunity to position this as a commercial GTM capability, not just a product feature.",
+      "These signals matter because Semrush can position GEO as the next layer of SEO and brand visibility, while Adobe can connect it to enterprise digital experience, content, and customer journey measurement.",
     gtmSalesImplication:
-      "Sales teams need a clearer narrative for selling AI visibility: how brands are found, cited, and recommended across AI search and answer engines. This requires stronger PMM messaging, enablement, competitive talk tracks, and proof points linked to pipeline and category visibility.",
+      "Sales teams need to move the conversation from keyword ranking to discoverability across AI search, answer engines, and LLM citations. This requires new PMM talk tracks, competitive positioning, and proof points.",
     hrbpImplication:
-      "For HRBP work, the implication is capability building: sales enablement, manager coaching, critical talent retention, and identifying where GEO/AEO knowledge is needed across Sales, Marketing, Product, and Customer-facing teams.",
+      "For HRBP work, this points to sales capability building, manager enablement, and identifying where GEO/AEO knowledge is needed across GTM roles.",
     recommendedAction:
-      "Review current GTM capability against the AI visibility narrative. Identify the roles and teams that need enablement first, align PMM/Sales messaging, and prepare a short stakeholder update on how GEO affects Semrush/Adobe GTM priorities.",
+      "Create a short GEO sales capability map, align PMM and Sales on the AI visibility narrative, and identify the first three roles that need enablement.",
     oneLineSummary:
-      "GEO and AI visibility are becoming a mainstream GTM category, and Semrush should treat this as a sales capability and positioning shift.",
+      "GEO is becoming a commercial GTM narrative, not just an SEO terminology shift.",
   };
 }
 
 function briefSectionText(brief: GeoAiDailyBrief, key: GeoBriefSectionKey, maxLength = 1500) {
-  const value = String(brief[key] || "").trim() || briefFallbackSections(brief)[key];
+  const stored = String(brief[key] || "").trim();
+  const value = stored && !containsAlertBooleanQuery(stored) ? stored : briefFallbackSections(brief)[key];
   return capDisplayText(value, maxLength);
 }
 

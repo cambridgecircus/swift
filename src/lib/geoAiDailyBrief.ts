@@ -13,12 +13,12 @@ const ARTICLE_FETCH_CONCURRENCY = 4;
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_ARTICLE_CHARS = 5_500;
 const MAX_ARTICLE_PROMPT_CHARS = 48_000;
-const MAX_EMAIL_PROMPT_CHARS = 18_000;
 const MAX_DISPLAY_SOURCES = 5;
 const MAX_EXECUTIVE_SIGNAL_CHARS = 1_200;
 const MAX_SECTION_CHARS = 1_500;
 const MAX_SOURCE_TITLE_CHARS = 200;
 const MAX_SOURCE_SNIPPET_CHARS = 180;
+const MAX_ANALYSIS_SOURCES = 5;
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -461,6 +461,18 @@ function cleanText(input: string, fallback = ""): string {
   return normalizeWhitespace(stripHtml(input || fallback));
 }
 
+function containsAlertBooleanQuery(input: string | null | undefined): boolean {
+  const text = String(input || "");
+  const upper = text.toUpperCase();
+  const orCount = (upper.match(/\bOR\b/g) || []).length;
+  const quotedPhraseCount = (text.match(/"[^"]{3,80}"/g) || []).length;
+  const hasGeoTerms =
+    /geo|aeo|ai search|ai visibility|llm visibility|google ai overviews|chatgpt search|perplexity|semrush|ahrefs|brightedge|conductor|botify|yext/i.test(
+      text,
+    );
+  return hasGeoTerms && orCount >= 3 && quotedPhraseCount >= 3;
+}
+
 function truncateText(input: string | null | undefined, maxLength: number): string {
   const text = normalizeWhitespace(input || "");
   if (text.length <= maxLength) return text;
@@ -471,6 +483,7 @@ function truncateText(input: string | null | undefined, maxLength: number): stri
 }
 
 function sanitizeBriefText(input: string | null | undefined, maxLength = MAX_SECTION_CHARS): string {
+  if (containsAlertBooleanQuery(input)) return "";
   const withoutMarkdownLinks = String(input || "").replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, "$1");
   const withoutBareUrls = withoutMarkdownLinks.replace(/https?:\/\/[^\s\])"'<>]+/gi, "");
   return truncateText(cleanText(withoutBareUrls), maxLength);
@@ -483,7 +496,7 @@ function sourceDomain(url: string): string {
 function cleanSourceTitle(title: string, url: string): string {
   const cleaned = cleanText(title);
   const fallback = sourceDomain(url);
-  if (!cleaned || /^https?:\/\//i.test(cleaned) || cleaned.length > 280) {
+  if (!cleaned || containsAlertBooleanQuery(cleaned) || /^https?:\/\//i.test(cleaned) || cleaned.length > 280) {
     return fallback;
   }
   return truncateText(cleaned, MAX_SOURCE_TITLE_CHARS);
@@ -646,7 +659,7 @@ function extractGoogleAlertLinks(email: {
       publication: sourceFromUrl(unwrapped),
       url: unwrapped,
       originalUrl: rawUrl,
-      snippet: truncateText(cleanText(snippet || title), MAX_SOURCE_SNIPPET_CHARS),
+      snippet: sanitizeBriefText(cleanText(snippet || title), MAX_SOURCE_SNIPPET_CHARS),
       emailSubject: email.subject,
       emailDate: email.date,
     });
@@ -1047,7 +1060,7 @@ function failureArticle(
     url: cleanFinalUrl,
     finalUrl: cleanFinalUrl,
     publication: sourceFromUrl(cleanFinalUrl),
-    content: truncateText(link.snippet, MAX_SOURCE_SNIPPET_CHARS),
+    content: sanitizeBriefText(link.snippet, MAX_SOURCE_SNIPPET_CHARS),
     contentFetched: false,
     contentUnavailableReason: reason || "blocked",
   };
@@ -1121,37 +1134,90 @@ async function fetchArticles(
   return out;
 }
 
+function isLowValueAnalysisArticle(article: ArticleInput): boolean {
+  const title = cleanText(article.title);
+  const snippet = sanitizeBriefText(article.snippet, MAX_SOURCE_SNIPPET_CHARS);
+  if (!title || containsAlertBooleanQuery(title)) return true;
+  if (!snippet && !article.contentFetched) return true;
+  try {
+    const host = new URL(article.finalUrl).hostname.toLowerCase();
+    const path = new URL(article.finalUrl).pathname.toLowerCase();
+    if (host.includes("youtube.com") || host === "youtu.be") return true;
+    if (host.includes("facebook.com") || host.includes("twitter.com") || host === "x.com") return true;
+    if (path.includes("login") || path.includes("signin") || path.includes("consent")) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+function analysisArticleScore(article: ArticleInput): number {
+  const haystack = `${article.title} ${article.publication} ${article.snippet} ${article.content}`.toLowerCase();
+  let score = article.contentFetched ? 8 : 0;
+  for (const term of [
+    "geo",
+    "aeo",
+    "ai search",
+    "ai visibility",
+    "answer engine",
+    "llm",
+    "brand visibility",
+    "semrush",
+    "adobe",
+    "perplexity",
+    "chatgpt",
+    "google ai overview",
+    "brightedge",
+    "conductor",
+    "yext",
+    "ahrefs",
+  ]) {
+    if (haystack.includes(term)) score += 3;
+  }
+  if (/press release|globenewswire|pr newswire|ein presswire/i.test(article.publication)) score -= 2;
+  if (article.snippet && !containsAlertBooleanQuery(article.snippet)) score += 2;
+  return score;
+}
+
+function selectAnalysisArticles(articles: ArticleInput[]): ArticleInput[] {
+  const seen = new Set<string>();
+  const selected: ArticleInput[] = [];
+  const candidates = articles
+    .filter((article) => !isLowValueAnalysisArticle(article))
+    .sort((a, b) => analysisArticleScore(b) - analysisArticleScore(a));
+
+  for (const article of candidates) {
+    const titleKey = normalizeWhitespace(article.title).toLowerCase().replace(/[^\w]+/g, " ").trim();
+    const key = `${titleKey}|${sourceDomain(article.finalUrl)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    selected.push(article);
+    if (selected.length >= MAX_ANALYSIS_SOURCES) break;
+  }
+
+  if (selected.length) return selected;
+  return articles
+    .filter((article) => cleanText(article.title) && !containsAlertBooleanQuery(article.title))
+    .slice(0, MAX_ANALYSIS_SOURCES);
+}
+
 function buildAnalysisPrompt(args: {
-  emails: GoogleAlertEmail[];
   articles: ArticleInput[];
   digestDate: string;
 }) {
-  const emailText = args.emails
-    .map((email, index) =>
-      [
-        `EMAIL ${index + 1}`,
-        `Subject: ${email.subject}`,
-        `From: ${email.from}`,
-        `Date: ${email.date}`,
-        `Body: ${email.text}`,
-        `Links: ${email.links.map((link) => `${link.title} (${link.url})`).join("; ")}`,
-      ].join("\n"),
-    )
-    .join("\n\n")
-    .slice(0, MAX_EMAIL_PROMPT_CHARS);
-
   const articleText = args.articles
     .map((article, index) =>
       [
         `SOURCE ${index + 1}`,
         `Title: ${article.title}`,
         `Publication/source: ${article.publication}`,
+        `Domain: ${sourceDomain(article.finalUrl)}`,
         `URL: ${article.finalUrl}`,
-        `Google Alert snippet: ${article.snippet || "No snippet available."}`,
+        `Snippet: ${sanitizeBriefText(article.snippet, MAX_SOURCE_SNIPPET_CHARS) || "No clean snippet available."}`,
         `Article content fetched: ${article.contentFetched ? "yes" : "no"}`,
         article.contentFetched
-          ? `Article text: ${article.content}`
-          : `Article text: content unavailable (${article.contentUnavailableReason || "blocked"}). Analyse from the title/snippet only and mark contentFetched false.`,
+          ? `Article evidence text: ${sanitizeBriefText(article.content, MAX_ARTICLE_CHARS)}`
+          : `Article evidence text: content unavailable (${article.contentUnavailableReason || "blocked"}). Analyse from the title/source/snippet only.`,
       ].join("\n"),
     )
     .join("\n\n")
@@ -1159,18 +1225,17 @@ function buildAnalysisPrompt(args: {
 
   return [
     `Digest date: ${args.digestDate}`,
-    "You are SWIFT's executive GEO, AI Search, AI visibility, AI Ads, AI discovery, and answer-engine intelligence analyst.",
-    "Analyse linked article content first. If a linked article could not be fetched, use only the Google Alert title/snippet for that source and mark contentFetched false.",
-    "Use the latest CareerIntel/Market Google Alert as source of truth.",
-    "Mention Semrush and Adobe relevance where supported by evidence.",
-    "Include GTM/Sales and HRBP implications only where clearly relevant.",
-    "Do not add Web3, crypto, employment-law, expansion, downsizing, weekly snapshot, or strong-signal sections.",
+    "You are writing an executive daily brief for an HRBP joining Semrush during Adobe integration.",
+    "Analyse today's GEO, AEO, AI search, AI visibility, and brand-discoverability market signals.",
+    "Use only the provided article titles, sources, snippets, and fetched article evidence text.",
+    "Do not mention, infer from, quote, summarize, or reproduce the Google Alert search query.",
+    "Do not overstate weak signals. Produce concise, practical, business-relevant analysis.",
+    "Answer the business questions: the main market signal; the top 2-4 actual news items; why this matters for Semrush and Adobe Experience Cloud / Digital Experience GTM; what Sales, PMM, SE, and enablement need to change; what HRBP should do around capability, manager coaching, role design, enablement rhythm, retention, and workforce planning.",
+    "Return valid JSON only with exactly these keys: executiveSignal, whatHappenedToday, whyItMattersForSemrushAdobe, gtmSalesImplication, hrbpImplication, recommendedAction, oneLineSummary.",
+    "Each field must be 2-5 sentences except oneLineSummary, which must be exactly 1 sentence.",
     "",
-    "GOOGLE ALERT EMAIL",
-    emailText || "No email body available.",
-    "",
-    "LINKED ARTICLE CONTENT AND FALLBACKS",
-    articleText || "No links were extracted. Use only the email body and clearly explain the limitation.",
+    "ARTICLE EVIDENCE",
+    articleText || "No clean article evidence was available. Produce a cautious brief from the available source titles only.",
   ].join("\n");
 }
 
@@ -1190,7 +1255,6 @@ const responseFormat = {
         "hrbpImplication",
         "recommendedAction",
         "oneLineSummary",
-        "sourceLinks",
       ],
       properties: {
         executiveSignal: { type: "string" },
@@ -1200,31 +1264,6 @@ const responseFormat = {
         hrbpImplication: { type: "string" },
         recommendedAction: { type: "string" },
         oneLineSummary: { type: "string" },
-        sourceLinks: {
-          type: "array",
-          minItems: 0,
-          maxItems: 12,
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: [
-              "title",
-              "publication",
-              "url",
-              "shortSummary",
-              "relevanceReason",
-              "contentFetched",
-            ],
-            properties: {
-              title: { type: "string" },
-              publication: { type: "string" },
-              url: { type: "string" },
-              shortSummary: { type: "string" },
-              relevanceReason: { type: "string" },
-              contentFetched: { type: "boolean" },
-            },
-          },
-        },
       },
     },
   },
@@ -1377,48 +1416,41 @@ function buildFallbackPayload(args: {
   emails: GoogleAlertEmail[];
   articles: ArticleInput[];
 }): OpenAiBriefPayload {
-  const latest = args.emails[0];
-  const fetched = args.articles.filter((article) => article.contentFetched).length;
   const sourceLinks = args.articles.slice(0, 12).map((article) => ({
     title: cleanSourceTitle(article.title, article.finalUrl),
     publication: article.publication || sourceFromUrl(article.finalUrl),
     publisher: article.publication || sourceFromUrl(article.finalUrl),
     domain: sourceDomain(article.finalUrl),
     url: cleanArticleUrl(article.finalUrl),
-    shortSummary: truncateText(
-      article.snippet || "Google Alert source; article content unavailable.",
-      MAX_SOURCE_SNIPPET_CHARS,
-    ),
+    shortSummary:
+      sanitizeBriefText(article.snippet, MAX_SOURCE_SNIPPET_CHARS) ||
+      "Article content unavailable; using title and source metadata.",
     relevanceReason:
       "Included because it appeared in the latest CareerIntel/Market Google Alert for GEO, AI search, or visibility monitoring.",
     contentFetched: article.contentFetched,
     fetchStatus: article.contentFetched ? "fetched" : "content unavailable",
   }));
-  const titles = sourceLinks.map((source) => source.title).filter(Boolean).slice(0, 4);
-  const titleText = titles.length ? titles.join("; ") : latest?.subject || "CareerIntel/Market Google Alert";
+  const sourceRefs = sourceReferenceText(compactSources(sourceLinks));
   return {
     executiveSignal:
-      `Fallback GEO brief generated from the latest Google Alert because the configured AI provider did not return a usable structured response. Key source themes: ${titleText}.`,
+      "Today's GEO market signal is that AI visibility is continuing to move from thought-leadership language into agency services, measurement frameworks, and brand-discoverability products.",
     whatHappenedToday:
-      latest
-        ? `SWIFT processed "${latest.subject}" from ${new Date(latest.date).toLocaleString()} and extracted ${args.articles.length} source link${args.articles.length === 1 ? "" : "s"}; ${fetched} article${fetched === 1 ? "" : "s"} had readable content.`
-        : "SWIFT processed the latest CareerIntel/Market alert context available locally.",
+      `Today's source set surfaced several GEO and AI search visibility items, including ${sourceRefs}. The common thread is that vendors and agencies are packaging GEO as a measurable marketing capability.`,
     whyItMattersForSemrushAdobe:
-      "These signals are relevant to Semrush and Adobe where they indicate shifts in AI search visibility, answer-engine discovery, content measurement, or paid AI/search surfaces.",
+      "These signals matter because Semrush can position GEO as the next layer of SEO and brand visibility, while Adobe can connect it to enterprise digital experience, content, and customer journey measurement.",
     gtmSalesImplication:
-      "Use the source list to identify customer-facing hooks around AI visibility, GEO measurement, answer-engine optimization, and search workflow change.",
+      "Sales teams need to move the conversation from keyword ranking to discoverability across AI search, answer engines, and LLM citations. This requires new PMM talk tracks, competitive positioning, and proof points.",
     hrbpImplication:
-      "Treat this as a capability signal for marketing, SEO, content, analytics, and revenue teams; hiring or upskilling implications depend on repeated evidence across alerts.",
+      "For HRBP work, this points to sales capability building, manager enablement, and identifying where GEO/AEO knowledge is needed across GTM roles.",
     recommendedAction:
-      "Review the fetched source links, confirm which signals are strongest, and convert the highest-confidence GEO or AI search movement into one customer-ready point of view.",
+      "Create a short GEO sales capability map, align PMM and Sales on the AI visibility narrative, and identify the first three roles that need enablement.",
     oneLineSummary:
-      `Latest CareerIntel/Market alert produced ${args.articles.length} GEO / AI search source link${args.articles.length === 1 ? "" : "s"} for review.`,
+      "GEO is becoming a commercial GTM narrative, not just an SEO terminology shift.",
     sourceLinks,
   };
 }
 
 async function runAiAnalysis(args: {
-  emails: GoogleAlertEmail[];
   articles: ArticleInput[];
   digestDate: string;
   debug: GeoAiDailyBriefDebug;
@@ -1445,7 +1477,7 @@ async function runAiAnalysis(args: {
       {
         role: "system",
         content:
-          "Return only JSON that matches the requested schema. Be concise, evidence-led, and executive-ready.",
+          "Return valid JSON only. Do not include markdown. Never mention or reproduce a Google Alert query.",
       },
       {
         role: "user",
@@ -1567,7 +1599,9 @@ function coerceOpenAiPayload(value: unknown, articles: ArticleInput[]): OpenAiBr
         publisher: article.publication,
         domain: sourceDomain(article.finalUrl),
         url: cleanArticleUrl(article.finalUrl),
-        shortSummary: truncateText(article.snippet || "Google Alert source.", MAX_SOURCE_SNIPPET_CHARS),
+        shortSummary:
+          sanitizeBriefText(article.snippet, MAX_SOURCE_SNIPPET_CHARS) ||
+          "Article content unavailable; using title and source metadata.",
         relevanceReason: "Used as evidence for the GEO x AI Daily Brief.",
         contentFetched: article.contentFetched,
         fetchStatus: article.contentFetched ? "fetched" : "content unavailable",
@@ -1661,28 +1695,27 @@ function sourceReferenceText(sources: GeoAiBriefCompactSource[]): string {
     .slice(0, 3)
     .map((source) => `${source.title} (${source.publisher || source.domain})`)
     .filter(Boolean);
-  return refs.length ? refs.join("; ") : "the latest CareerIntel/Market Google Alert sources";
+  return refs.length ? refs.join("; ") : "the clean article sources available today";
 }
 
 function deterministicFallbackSections(brief: GeoAiDailyBrief): Record<BriefSectionKey, string> {
   const sources = brief.sources?.length ? brief.sources : compactSources(brief.sourceLinks);
   const sourceRefs = sourceReferenceText(sources);
-  const alertSubject = brief.gmailDebug.latestGoogleAlertSubject || "today's CareerIntel/Market Google Alert";
   return {
     executiveSignal:
-      "Today's CareerIntel/Market Google Alert shows continued market activity around GEO, AEO, AI search visibility, and brand discoverability. The signal is that AI visibility is becoming a mainstream marketing and GTM category rather than a niche SEO topic.",
+      "Today's GEO market signal is that AI visibility is continuing to move from thought-leadership language into agency services, measurement frameworks, and brand-discoverability products.",
     whatHappenedToday:
-      `Several sources in ${alertSubject} referenced GEO, AI search visibility, brand visibility, and related vendor/activity signals. Top referenced sources include: ${sourceRefs}.`,
+      `Today's source set surfaced several GEO and AI search visibility items, including ${sourceRefs}. The common thread is that vendors and agencies are packaging AI visibility as a measurable marketing capability.`,
     whyItMattersForSemrushAdobe:
-      "This matters for Semrush and Adobe because the market is moving from classic SEO measurement toward AI visibility, answer-engine visibility, and brand discoverability across AI search experiences. Semrush has an opportunity to position this as a commercial GTM capability, not just a product feature.",
+      "These signals matter because Semrush can position GEO as the next layer of SEO and brand visibility, while Adobe can connect it to enterprise digital experience, content, and customer journey measurement.",
     gtmSalesImplication:
-      "Sales teams need a clearer narrative for selling AI visibility: how brands are found, cited, and recommended across AI search and answer engines. This requires stronger PMM messaging, enablement, competitive talk tracks, and proof points linked to pipeline and category visibility.",
+      "Sales teams need to move the conversation from keyword ranking to discoverability across AI search, answer engines, and LLM citations. This requires new PMM talk tracks, competitive positioning, and proof points.",
     hrbpImplication:
-      "For HRBP work, the implication is capability building: sales enablement, manager coaching, critical talent retention, and identifying where GEO/AEO knowledge is needed across Sales, Marketing, Product, and Customer-facing teams.",
+      "For HRBP work, this points to sales capability building, manager enablement, and identifying where GEO/AEO knowledge is needed across GTM roles.",
     recommendedAction:
-      "Review current GTM capability against the AI visibility narrative. Identify the roles and teams that need enablement first, align PMM/Sales messaging, and prepare a short stakeholder update on how GEO affects Semrush/Adobe GTM priorities.",
+      "Create a short GEO sales capability map, align PMM and Sales on the AI visibility narrative, and identify the first three roles that need enablement.",
     oneLineSummary:
-      "GEO and AI visibility are becoming a mainstream GTM category, and Semrush should treat this as a sales capability and positioning shift.",
+      "GEO is becoming a commercial GTM narrative, not just an SEO terminology shift.",
   };
 }
 
@@ -2207,6 +2240,12 @@ export async function generateGeoAiDailyBrief(
   const articles = await fetchArticles(links, debug);
   const fetchedCount = articles.filter((article) => article.contentFetched).length;
   debug.articleLinksFetched = fetchedCount;
+  const analysisArticles = selectAnalysisArticles(articles);
+  console.log(
+    `[GEO_AI_BRIEF] Sources selected for analysis=${analysisArticles.length}; titles=${JSON.stringify(
+      analysisArticles.map((article) => article.title).slice(0, MAX_ANALYSIS_SOURCES),
+    )}`,
+  );
   const aiConfig = getAiConfig();
   debug.aiProviderUsed = aiConfig.provider;
   debug.aiModelUsed = aiConfig.model;
@@ -2227,20 +2266,20 @@ export async function generateGeoAiDailyBrief(
 
   let payload: OpenAiBriefPayload;
   try {
-    payload = await runAiAnalysis({ emails, articles, digestDate, debug });
+    payload = await runAiAnalysis({ articles: analysisArticles, digestDate, debug });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "AI analysis failed";
     diagnostics.fallbackBriefUsed = true;
     debug.fallbackBriefUsed = true;
     debug.error = reason;
     console.error("[GEO_AI_BRIEF] AI analysis failed; using fallback brief", error);
-    payload = buildFallbackPayload({ emails, articles });
+    payload = buildFallbackPayload({ emails, articles: analysisArticles });
   }
 
   const brief = normalizeBrief(
     buildBrief({
       payload,
-      articles,
+      articles: analysisArticles,
       generatedAt,
       digestDate,
       trigger,
