@@ -1,28 +1,83 @@
-import { ImapFlow } from "imapflow";
-import { simpleParser } from "mailparser";
-
-import {
-  extractFirstBalancedJsonObject,
-  invokeAiJsonStrict,
-  isAiConfigured,
-  stripMarkdownFences,
-} from "@/lib/aiProvider";
-import { isLikelyArticleUrl, resolveGoogleNewsUrl } from "@/lib/dailyMarketArticleFetcher";
+import { resolveGoogleNewsUrl } from "@/lib/dailyMarketArticleFetcher";
 import { getLatestRuns, saveIntelligenceRun } from "@/lib/intelligenceStorage";
-import { runGuardedFetch } from "@/lib/imapFetchGuard";
 
-const DEFAULT_LABEL = "Daily Career Intel Digest for ChatGPT";
-const MAX_EMAILS = 4;
-const MAX_LINKS = 14;
-const MAX_EMAIL_CHARS = 28_000;
-const MAX_PAGE_CHARS = 36_000;
-const FETCH_TIMEOUT_MS = 10_000;
+const EXPECTED_GMAIL_ACCOUNT = "cambridgecircus@gmail.com";
+const DEFAULT_SOURCE_LABEL = "CareerIntel/Market";
+const DEFAULT_DIGEST_LABEL = "Daily Career Intel Digest for ChatGPT";
+const DEFAULT_DIGEST_TO = EXPECTED_GMAIL_ACCOUNT;
+const GOOGLE_ALERTS_FROM = "googlealerts-noreply@google.com";
+const SEARCH_WINDOW_DAYS = 14;
+const DEFAULT_LOOKBACK_HOURS = 48;
+const MAX_LINKS = 12;
+const ARTICLE_FETCH_CONCURRENCY = 4;
+const FETCH_TIMEOUT_MS = 8_000;
+const MAX_ARTICLE_CHARS = 5_500;
+const MAX_ARTICLE_PROMPT_CHARS = 48_000;
+const MAX_EMAIL_PROMPT_CHARS = 18_000;
+const OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions";
+const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
+const GMAIL_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+type BriefTrigger = "manual" | "scheduled";
+
+type GoogleAlertEmail = {
+  id: string;
+  threadId?: string;
+  subject: string;
+  from: string;
+  date: string;
+  internalDate: number;
+  text: string;
+  html: string;
+  links: ExtractedAlertLink[];
+};
+
+type ExtractedAlertLink = {
+  title: string;
+  publication: string;
+  url: string;
+  originalUrl: string;
+  snippet: string;
+  emailSubject: string;
+  emailDate: string;
+};
+
+type ArticleInput = ExtractedAlertLink & {
+  finalUrl: string;
+  content: string;
+  contentFetched: boolean;
+  contentUnavailableReason?: string;
+};
 
 export type GeoAiBriefSource = {
   title: string;
-  url?: string;
-  source?: string;
-  fetched?: boolean;
+  publication: string;
+  url: string;
+  shortSummary: string;
+  relevanceReason: string;
+  contentFetched: boolean;
+};
+
+export type GeoAiDailyBriefDebug = {
+  authenticatedGmailAccount?: string;
+  expectedGmailAccount: string;
+  accountMatched: boolean;
+  configuredGmailUser?: string;
+  configuredGmailUserMatched?: boolean;
+  careerIntelMarketLabelExists: boolean;
+  careerIntelMarketLabelId?: string;
+  careerIntelMarketLabelName?: string;
+  labelSearchMessagesFound: number;
+  fallbackSearchMessagesFound: number;
+  successfulGmailQuery?: string;
+  latestGoogleAlertSubject?: string;
+  latestGoogleAlertTimestamp?: string;
+  articleLinksExtracted: number;
+  articleLinksFetched: number;
+  fetchErrors: string[];
+  error?: string;
+  logs: string[];
 };
 
 export type GeoAiDailyBrief = {
@@ -30,55 +85,266 @@ export type GeoAiDailyBrief = {
   title: "GEO x AI Daily Brief";
   generatedAt: string;
   lastUpdatedAt: string;
+  digestDate: string;
+  trigger: BriefTrigger;
   headline: string;
+  executiveSignal: string;
+  whatHappenedToday: string;
+  whyItMattersForSemrushAdobe: string;
+  gtmSalesImplication: string;
+  hrbpImplication: string;
+  recommendedAction: string;
+  oneLineSummary: string;
   executiveSummary: string;
-  keyDevelopments: string[];
-  implications: string[];
-  recommendedActions: string[];
-  sources: GeoAiBriefSource[];
+  topSignals: string[];
+  marketMovement: string;
+  geoAiSearchAdsImplications: string;
+  semrushAdobeRelevance: string;
+  hrbpOrgHiringRelevance: string;
+  sourceLinks: GeoAiBriefSource[];
+  warnings: string[];
+  email: {
+    to: string;
+    subject: string;
+    sent: boolean;
+    labelApplied: boolean;
+    messageId?: string;
+    error?: string;
+  };
+  gmailDebug: GeoAiDailyBriefDebug;
   diagnostics: {
-    label: string;
-    emailsRead: number;
-    linksFound: number;
-    linksFetched: number;
+    sourceLabel: string;
+    digestLabel: string;
+    lookbackHours: number;
+    gmailMessagesFound: number;
+    googleAlertMessagesProcessed: number;
+    linksExtracted: number;
+    articlesFetched: number;
+    articleFetchFailures: number;
     storageSaved?: boolean;
     storageError?: string;
+    duplicateScheduledEmailSkipped?: boolean;
   };
 };
 
-type ParsedDigestEmail = {
-  subject: string;
-  from: string;
-  date: string;
-  text: string;
-  links: GeoAiBriefSource[];
+type OpenAiSourceLink = {
+  title: string;
+  publication: string;
+  url: string;
+  shortSummary: string;
+  relevanceReason: string;
+  contentFetched: boolean;
 };
 
-function getGmailLabelName() {
+type OpenAiBriefPayload = {
+  executiveSignal: string;
+  whatHappenedToday: string;
+  whyItMattersForSemrushAdobe: string;
+  gtmSalesImplication: string;
+  hrbpImplication: string;
+  recommendedAction: string;
+  oneLineSummary: string;
+  sourceLinks: OpenAiSourceLink[];
+};
+
+type GenerateGeoAiDailyBriefOptions = {
+  trigger?: BriefTrigger;
+  lookbackHours?: number;
+  sendEmail?: boolean;
+  forceSendEmail?: boolean;
+};
+
+type GenerateGeoAiDailyBriefResult = {
+  brief: GeoAiDailyBrief | null;
+  storage: { saved: boolean; runId?: string; error?: string };
+  empty?: boolean;
+  duplicateSkipped?: boolean;
+  message?: string;
+  debug?: GeoAiDailyBriefDebug;
+};
+
+type GmailTokenResponse = {
+  access_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+};
+
+type GmailProfile = {
+  emailAddress?: string;
+};
+
+type GmailLabel = {
+  id: string;
+  name: string;
+};
+
+type GmailLabelsResponse = {
+  labels?: GmailLabel[];
+};
+
+type GmailMessageListItem = {
+  id: string;
+  threadId?: string;
+};
+
+type GmailMessageListResponse = {
+  messages?: GmailMessageListItem[];
+  resultSizeEstimate?: number;
+};
+
+type GmailHeader = {
+  name: string;
+  value: string;
+};
+
+type GmailBody = {
+  data?: string;
+};
+
+type GmailPayload = {
+  mimeType?: string;
+  headers?: GmailHeader[];
+  body?: GmailBody;
+  parts?: GmailPayload[];
+};
+
+type GmailMessage = {
+  id: string;
+  threadId?: string;
+  labelIds?: string[];
+  snippet?: string;
+  internalDate?: string;
+  payload?: GmailPayload;
+};
+
+type OpenAiChatResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+    };
+  }>;
+  error?: {
+    message?: string;
+  };
+};
+
+type GmailSendMessageResponse = {
+  id?: string;
+  threadId?: string;
+};
+
+class GeoAiBriefGenerationError extends Error {
+  debug: GeoAiDailyBriefDebug;
+
+  constructor(message: string, debug: GeoAiDailyBriefDebug) {
+    super(message);
+    this.name = "GeoAiBriefGenerationError";
+    this.debug = debug;
+  }
+}
+
+export function getGeoAiBriefErrorDebug(error: unknown): GeoAiDailyBriefDebug | undefined {
+  return error instanceof GeoAiBriefGenerationError ? error.debug : undefined;
+}
+
+function getSourceLabelName() {
   return (
-    process.env.GMAIL_LABEL_NAME?.trim() ||
-    process.env.GMAIL_DAILY_MARKET_INTEL_LABEL?.trim() ||
-    DEFAULT_LABEL
+    process.env.GMAIL_MARKET_LABEL?.trim() ||
+    process.env.GMAIL_SOURCE_LABEL?.trim() ||
+    DEFAULT_SOURCE_LABEL
   );
+}
+
+function getDigestLabelName() {
+  return (
+    process.env.GMAIL_DIGEST_LABEL?.trim() ||
+    process.env.GMAIL_OUTPUT_LABEL?.trim() ||
+    DEFAULT_DIGEST_LABEL
+  );
+}
+
+function getDigestRecipient() {
+  return process.env.GMAIL_DIGEST_TO?.trim() || DEFAULT_DIGEST_TO;
+}
+
+function getOpenAiModel() {
+  return process.env.OPENAI_MODEL?.trim() || DEFAULT_OPENAI_MODEL;
+}
+
+function getOpenAiUrl() {
+  const baseUrl = process.env.OPENAI_BASE_URL?.trim();
+  if (!baseUrl) return OPENAI_CHAT_COMPLETIONS_URL;
+  return `${baseUrl.replace(/\/+$/g, "")}/chat/completions`;
+}
+
+function createDebug(): GeoAiDailyBriefDebug {
+  return {
+    expectedGmailAccount: EXPECTED_GMAIL_ACCOUNT,
+    accountMatched: false,
+    configuredGmailUser: process.env.GMAIL_USER?.trim() || undefined,
+    configuredGmailUserMatched:
+      !process.env.GMAIL_USER?.trim() ||
+      process.env.GMAIL_USER.trim().toLowerCase() === EXPECTED_GMAIL_ACCOUNT,
+    careerIntelMarketLabelExists: false,
+    labelSearchMessagesFound: 0,
+    fallbackSearchMessagesFound: 0,
+    articleLinksExtracted: 0,
+    articleLinksFetched: 0,
+    fetchErrors: [],
+    logs: [],
+  };
+}
+
+function logDebug(debug: GeoAiDailyBriefDebug, message: string) {
+  debug.logs.push(message);
+  console.log(`[GEO_AI_BRIEF] ${message}`);
+}
+
+function failWithDebug(debug: GeoAiDailyBriefDebug, message: string): never {
+  debug.error = message;
+  console.error(`[GEO_AI_BRIEF] ${message}`);
+  throw new GeoAiBriefGenerationError(message, debug);
 }
 
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function decodeHtmlEntities(input: string): string {
+  return input
+    .replace(/&amp;/gi, "&")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) =>
+      String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)));
+}
+
 function stripHtml(html: string): string {
   return normalizeWhitespace(
-    html
-      .replace(/<script[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style>/gi, " ")
-      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, "\""),
+    decodeHtmlEntities(
+      html
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+        .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+        .replace(/<[^>]+>/g, " "),
+    ),
   );
+}
+
+function escapeHtml(input: string): string {
+  return input
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function sourceFromUrl(url: string): string {
@@ -89,111 +355,516 @@ function sourceFromUrl(url: string): string {
   }
 }
 
-function cleanUrl(url: string): string {
-  return url.trim().replace(/[)\]>"'<.,;:!?]+$/g, "");
+function cleanText(input: string, fallback = ""): string {
+  return normalizeWhitespace(stripHtml(input || fallback));
 }
 
-function shouldSkipUrl(url: string): boolean {
-  const u = url.toLowerCase();
-  return (
-    !/^https?:\/\//i.test(url) ||
-    u.includes("unsubscribe") ||
-    u.includes("email-settings") ||
-    u.includes("/privacy") ||
-    u.includes("/terms") ||
-    /\.(png|jpe?g|gif|webp|svg|css|js|woff2?|pdf)(\?|#|$)/i.test(u)
-  );
+function cleanUrl(input: string): string {
+  return decodeHtmlEntities(input)
+    .trim()
+    .replace(/[\])}"'<.,;:!?]+$/g, "");
 }
 
-function extractLinks(html: string, text: string): GeoAiBriefSource[] {
-  const out: GeoAiBriefSource[] = [];
+function isHttpUrl(input: string): boolean {
+  try {
+    const url = new URL(input);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function unwrapGoogleRedirectUrl(input: string): string {
+  let url = cleanUrl(input);
+  for (let i = 0; i < 4; i += 1) {
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      const path = parsed.pathname.toLowerCase();
+
+      if (host.endsWith("google.com") && path.startsWith("/amp/")) {
+        const stripped = parsed.pathname.replace(/^\/amp\/s?\//i, "");
+        url = `${path.startsWith("/amp/s/") ? "https" : "http"}://${stripped}${parsed.search}`;
+        continue;
+      }
+
+      const directParam =
+        parsed.searchParams.get("url") ||
+        parsed.searchParams.get("q") ||
+        parsed.searchParams.get("u");
+      if (directParam && isHttpUrl(directParam)) {
+        url = directParam;
+        continue;
+      }
+    } catch {
+      return url;
+    }
+    break;
+  }
+  return cleanUrl(url);
+}
+
+function withoutTrackingParams(input: string): string {
+  try {
+    const url = new URL(input);
+    const trackingPrefixes = ["utm_"];
+    const trackingParams = new Set([
+      "fbclid",
+      "gclid",
+      "mc_cid",
+      "mc_eid",
+      "igshid",
+      "ref",
+      "source",
+    ]);
+
+    for (const key of Array.from(url.searchParams.keys())) {
+      const lower = key.toLowerCase();
+      if (trackingParams.has(lower) || trackingPrefixes.some((prefix) => lower.startsWith(prefix))) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return input;
+  }
+}
+
+function urlKey(input: string): string {
+  return withoutTrackingParams(input).replace(/\/$/g, "").toLowerCase();
+}
+
+function isUtilityLink(rawUrl: string, labelText: string): boolean {
+  const unwrapped = unwrapGoogleRedirectUrl(rawUrl);
+  const haystack = `${rawUrl} ${unwrapped} ${labelText}`.toLowerCase();
+  if (!isHttpUrl(unwrapped)) return true;
+  if (
+    haystack.includes("unsubscribe") ||
+    haystack.includes("send feedback") ||
+    haystack.includes("view all alerts") ||
+    haystack.includes("edit this alert") ||
+    haystack.includes("see more results") ||
+    haystack.includes("flag as irrelevant") ||
+    haystack.includes("privacy") ||
+    haystack.includes("terms") ||
+    haystack.includes("rss feed")
+  ) {
+    return true;
+  }
+
+  try {
+    const url = new URL(unwrapped);
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    if (host === "mail.google.com" || host.endsWith(".mail.google.com")) return true;
+    if (host === "accounts.google.com" || host.endsWith(".accounts.google.com")) return true;
+    if (host === "s.openai.com") return true;
+    if (
+      host === "alerts.google.com" ||
+      path.includes("/alerts/remove") ||
+      path.includes("/alerts/edit") ||
+      path.includes("/alerts/share") ||
+      path.includes("/alerts/feedback") ||
+      path.includes("/alerts")
+    ) {
+      return true;
+    }
+    if (
+      (host.includes("facebook.com") && (path.includes("share") || path.includes("sharer"))) ||
+      (host.includes("twitter.com") && (path.includes("share") || path.includes("intent"))) ||
+      (host === "x.com" && path.includes("intent")) ||
+      (host.includes("linkedin.com") && path.includes("share"))
+    ) {
+      return true;
+    }
+    return /\.(png|jpe?g|gif|webp|svg|css|js|woff2?|ico|pdf|xml|rss)(\?|#|$)/i.test(url.pathname);
+  } catch {
+    return true;
+  }
+}
+
+function snippetAroundAnchor(html: string, anchorStart: number, anchorEnd: number): string {
+  const before = html.slice(Math.max(0, anchorStart - 650), anchorStart);
+  const after = html.slice(anchorEnd, Math.min(html.length, anchorEnd + 950));
+  return cleanText(`${before} ${after}`).slice(0, 650);
+}
+
+function extractGoogleAlertLinks(email: {
+  html: string;
+  text: string;
+  subject: string;
+  date: string;
+}): ExtractedAlertLink[] {
+  const out: ExtractedAlertLink[] = [];
   const seen = new Set<string>();
-  const add = (title: string, rawUrl: string) => {
-    const url = cleanUrl(rawUrl);
-    if (shouldSkipUrl(url)) return;
-    const key = url.toLowerCase();
+  const add = (titleText: string, rawUrl: string, snippet = "") => {
+    const title = cleanText(titleText, rawUrl).slice(0, 220);
+    if (isUtilityLink(rawUrl, title)) return;
+    const unwrapped = withoutTrackingParams(unwrapGoogleRedirectUrl(rawUrl));
+    if (!isHttpUrl(unwrapped)) return;
+    const key = urlKey(unwrapped);
     if (seen.has(key)) return;
     seen.add(key);
     out.push({
-      title: normalizeWhitespace(stripHtml(title || url)).slice(0, 180) || sourceFromUrl(url),
-      url,
-      source: sourceFromUrl(url),
+      title: title || sourceFromUrl(unwrapped),
+      publication: sourceFromUrl(unwrapped),
+      url: unwrapped,
+      originalUrl: rawUrl,
+      snippet: snippet || title,
+      emailSubject: email.subject,
+      emailDate: email.date,
     });
   };
 
   const anchorRe = /<a\b[^>]*href\s*=\s*(?:"([^"]+)"|'([^']+)')[^>]*>([\s\S]*?)<\/a>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = anchorRe.exec(html))) {
-    add(m[3] ?? "", m[1] ?? m[2] ?? "");
+  let match: RegExpExecArray | null;
+  while ((match = anchorRe.exec(email.html))) {
+    const rawUrl = match[1] ?? match[2] ?? "";
+    const anchorText = match[3] ?? "";
+    add(anchorText, rawUrl, snippetAroundAnchor(email.html, match.index, anchorRe.lastIndex));
   }
 
-  for (const url of text.match(/https?:\/\/[^\s\])"'<>]+/gi) ?? []) {
-    add(url, url);
+  for (const rawUrl of email.text.match(/https?:\/\/[^\s\])"'<>]+/gi) ?? []) {
+    add(rawUrl, rawUrl, "");
   }
 
   return out.slice(0, MAX_LINKS);
 }
 
-async function fetchDigestEmails(): Promise<{ label: string; emails: ParsedDigestEmail[] }> {
-  return runGuardedFetch({
-    key: "geo-ai-daily-brief-gmail",
-    logPrefix: "[GEO_AI_BRIEF]",
-    fallback: () => ({ label: getGmailLabelName(), emails: [] }),
-    run: async () => {
-      const user = process.env.GMAIL_USER;
-      const pass = process.env.GMAIL_APP_PASSWORD;
-      const label = getGmailLabelName();
+function londonDateKey(date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const lookup = new Map(parts.map((part) => [part.type, part.value]));
+  return `${lookup.get("year")}-${lookup.get("month")}-${lookup.get("day")}`;
+}
 
-      if (!user || !pass) {
-        console.warn("[GEO_AI_BRIEF] Gmail credentials missing");
-        return { label, emails: [] };
-      }
+function gmailHeader(message: GmailMessage, name: string): string {
+  const header = message.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase());
+  return header?.value ?? "";
+}
 
-      const client = new ImapFlow({
-        host: "imap.gmail.com",
-        port: 993,
-        secure: true,
-        auth: { user, pass },
-      });
-      let mailboxLock: Awaited<ReturnType<ImapFlow["getMailboxLock"]>> | null = null;
+function decodeBase64Url(data: string): string {
+  const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  return Buffer.from(padded, "base64").toString("utf8");
+}
 
-      try {
-        await client.connect();
-        mailboxLock = await client.getMailboxLock(label);
-        const messages = client.fetch(
-          { since: new Date(Date.now() - 1000 * 60 * 60 * 24 * 10) },
-          { envelope: true, source: true },
-        );
-        const emails: ParsedDigestEmail[] = [];
+function collectPayloadBody(payload: GmailPayload | undefined): { html: string[]; text: string[] } {
+  const out = { html: [] as string[], text: [] as string[] };
+  const walk = (part: GmailPayload | undefined) => {
+    if (!part) return;
+    const data = part.body?.data ? decodeBase64Url(part.body.data) : "";
+    if (data && part.mimeType === "text/html") out.html.push(data);
+    if (data && part.mimeType === "text/plain") out.text.push(data);
+    for (const child of part.parts ?? []) walk(child);
+  };
+  walk(payload);
+  return out;
+}
 
-        for await (const message of messages) {
-          if (!message.source) continue;
-          const parsed = await simpleParser(message.source);
-          const html = typeof parsed.html === "string" ? parsed.html : "";
-          const text = typeof parsed.text === "string" ? parsed.text : stripHtml(html);
-          const bodyText = normalizeWhitespace(text || stripHtml(html));
-          if (!bodyText) continue;
+function topicScore(text: string): number {
+  const haystack = text.toLowerCase();
+  const keywords = [
+    "geo",
+    "aeo",
+    "ai search",
+    "generative engine optimization",
+    "generative engine optimisation",
+    "answer engine optimization",
+    "answer engine optimisation",
+    "ai visibility",
+    "llm visibility",
+    "google ai overviews",
+    "chatgpt search",
+    "perplexity",
+    "gemini",
+    "claude",
+    "semrush",
+    "ahrefs",
+    "similarweb",
+    "moz",
+    "brightedge",
+    "conductor",
+    "botify",
+    "seoclarity",
+    "yext",
+    "profound",
+    "scrunch",
+    "peec",
+    "otterly",
+    "athenahq",
+    "lantern",
+  ];
+  return keywords.reduce((score, keyword) => score + (haystack.includes(keyword) ? 1 : 0), 0);
+}
 
-          emails.push({
-            subject: parsed.subject || "Untitled digest",
-            from: parsed.from?.text || "Unknown sender",
-            date: parsed.date?.toISOString() || new Date().toISOString(),
-            text: bodyText.slice(0, 12_000),
-            links: extractLinks(html, text),
-          });
-        }
+async function getGmailAccessToken(debug: GeoAiDailyBriefDebug): Promise<string> {
+  const configuredUser = process.env.GMAIL_USER?.trim();
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim();
+  const refreshToken = process.env.GOOGLE_REFRESH_TOKEN?.trim();
 
-        emails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        return { label, emails: emails.slice(0, MAX_EMAILS) };
-      } catch (error) {
-        console.error("[GEO_AI_BRIEF] Gmail fetch failed", error);
-        return { label, emails: [] };
-      } finally {
-        if (mailboxLock) mailboxLock.release();
-        await client.logout().catch(() => undefined);
-      }
+  if (configuredUser && configuredUser.toLowerCase() !== EXPECTED_GMAIL_ACCOUNT) {
+    debug.configuredGmailUserMatched = false;
+    failWithDebug(
+      debug,
+      `Wrong Gmail account configured. Expected ${EXPECTED_GMAIL_ACCOUNT} but GMAIL_USER is ${configuredUser}. Update GOOGLE_REFRESH_TOKEN / Gmail OAuth credentials in Vercel.`,
+    );
+  }
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    failWithDebug(
+      debug,
+      "Gmail OAuth is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REFRESH_TOKEN for cambridgecircus@gmail.com.",
+    );
+  }
+
+  const res = await fetch(GMAIL_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+    }),
+  });
+  const body = (await res.json().catch(() => ({}))) as GmailTokenResponse;
+  if (!res.ok || !body.access_token) {
+    failWithDebug(
+      debug,
+      `Gmail OAuth token refresh failed: ${body.error_description || body.error || `HTTP ${res.status}`}`,
+    );
+  }
+
+  logDebug(debug, "Gmail OAuth token refresh succeeded");
+  return body.access_token;
+}
+
+async function gmailApi<T>(
+  accessToken: string,
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const res = await fetch(`${GMAIL_API_BASE}${path}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      ...(init.headers ?? {}),
     },
   });
+  const text = await res.text();
+  let body: unknown = {};
+  if (text) {
+    try {
+      body = JSON.parse(text) as unknown;
+    } catch {
+      body = { raw: text };
+    }
+  }
+  if (!res.ok) {
+    const err = body && typeof body === "object" && "error" in body ? JSON.stringify(body) : text;
+    throw new Error(`Gmail API ${path} failed: HTTP ${res.status} ${err.slice(0, 500)}`);
+  }
+  return body as T;
+}
+
+async function validateGmailAccount(
+  accessToken: string,
+  debug: GeoAiDailyBriefDebug,
+) {
+  const profile = await gmailApi<GmailProfile>(accessToken, "/profile");
+  const actual = profile.emailAddress || "unknown";
+  debug.authenticatedGmailAccount = actual;
+  debug.accountMatched = actual.toLowerCase() === EXPECTED_GMAIL_ACCOUNT;
+  logDebug(debug, `Gmail API profile emailAddress="${actual}"`);
+
+  if (!debug.accountMatched) {
+    failWithDebug(
+      debug,
+      `Wrong Gmail account connected. Expected ${EXPECTED_GMAIL_ACCOUNT} but authenticated account is ${actual}. Update GOOGLE_REFRESH_TOKEN / Gmail OAuth credentials in Vercel.`,
+    );
+  }
+
+  logDebug(debug, `Gmail API auth succeeded for ${EXPECTED_GMAIL_ACCOUNT}`);
+}
+
+async function listGmailMessages(args: {
+  accessToken: string;
+  query: string;
+  labelId?: string;
+}) {
+  const params = new URLSearchParams({
+    q: args.query,
+    maxResults: "20",
+    includeSpamTrash: "false",
+  });
+  if (args.labelId) params.append("labelIds", args.labelId);
+  return gmailApi<GmailMessageListResponse>(args.accessToken, `/messages?${params.toString()}`);
+}
+
+async function getFullGmailMessage(accessToken: string, id: string) {
+  return gmailApi<GmailMessage>(accessToken, `/messages/${encodeURIComponent(id)}?format=full`);
+}
+
+function messageToGoogleAlertEmail(message: GmailMessage): GoogleAlertEmail {
+  const body = collectPayloadBody(message.payload);
+  const html = body.html.join("\n");
+  const text = normalizeWhitespace(body.text.join("\n") || stripHtml(html) || message.snippet || "");
+  const internalDate = Number.parseInt(message.internalDate || "", 10) || Date.now();
+  const subject = gmailHeader(message, "subject") || "Google Alert";
+  const from = gmailHeader(message, "from") || GOOGLE_ALERTS_FROM;
+  const dateHeader = gmailHeader(message, "date");
+  const date = dateHeader && !Number.isNaN(new Date(dateHeader).getTime())
+    ? new Date(dateHeader).toISOString()
+    : new Date(internalDate).toISOString();
+  const email: GoogleAlertEmail = {
+    id: message.id,
+    threadId: message.threadId,
+    subject,
+    from,
+    date,
+    internalDate,
+    text,
+    html,
+    links: [],
+  };
+  email.links = extractGoogleAlertLinks(email);
+  return email;
+}
+
+async function fetchGoogleAlertEmails(): Promise<{
+  sourceLabel: string;
+  accessToken: string;
+  messagesFound: number;
+  emails: GoogleAlertEmail[];
+  debug: GeoAiDailyBriefDebug;
+  successfulQuery?: string;
+}> {
+  const debug = createDebug();
+  const sourceLabel = getSourceLabelName();
+  const query = `from:(${GOOGLE_ALERTS_FROM}) newer_than:${SEARCH_WINDOW_DAYS}d`;
+
+  const accessToken = await getGmailAccessToken(debug);
+  await validateGmailAccount(accessToken, debug);
+
+  const labels = await gmailApi<GmailLabelsResponse>(accessToken, "/labels");
+  const careerLabel = (labels.labels ?? []).find((label) => label.name === sourceLabel);
+  debug.careerIntelMarketLabelExists = Boolean(careerLabel);
+  debug.careerIntelMarketLabelId = careerLabel?.id;
+  debug.careerIntelMarketLabelName = careerLabel?.name;
+  logDebug(
+    debug,
+    careerLabel
+      ? `CareerIntel/Market label exists id="${careerLabel.id}" name="${careerLabel.name}"`
+      : `CareerIntel/Market label not found by exact name "${sourceLabel}"`,
+  );
+
+  let primary: GmailMessageListResponse = {};
+  if (careerLabel) {
+    primary = await listGmailMessages({ accessToken, query, labelId: careerLabel.id });
+    debug.labelSearchMessagesFound =
+      primary.resultSizeEstimate ?? primary.messages?.length ?? 0;
+    logDebug(
+      debug,
+      `Primary Gmail API search labelIds=["${careerLabel.id}"] q="${query}" found=${debug.labelSearchMessagesFound}`,
+    );
+  }
+
+  const fallback = await listGmailMessages({ accessToken, query });
+  debug.fallbackSearchMessagesFound =
+    fallback.resultSizeEstimate ?? fallback.messages?.length ?? 0;
+  logDebug(debug, `Fallback Gmail API search q="${query}" found=${debug.fallbackSearchMessagesFound}`);
+
+  const primaryIds = new Set((primary.messages ?? []).map((item) => item.id));
+  const fallbackIds = new Set((fallback.messages ?? []).map((item) => item.id));
+  const orderedIds = new Map<string, GmailMessageListItem>();
+  for (const item of primary.messages ?? []) orderedIds.set(item.id, item);
+  for (const item of fallback.messages ?? []) orderedIds.set(item.id, item);
+
+  const fullMessages = await Promise.all(
+    Array.from(orderedIds.values()).map((item) => getFullGmailMessage(accessToken, item.id)),
+  );
+
+  const allEmails = fullMessages.map(messageToGoogleAlertEmail);
+  for (const email of allEmails) {
+    logDebug(
+      debug,
+      `Gmail message found subject="${email.subject}" from="${email.from}" date="${email.date}"`,
+    );
+  }
+
+  const googleAlerts = allEmails
+    .filter((email) => email.subject.startsWith("Google Alert -"))
+    .sort((a, b) => b.internalDate - a.internalDate);
+  logDebug(debug, `Google Alert messages processed=${googleAlerts.length}`);
+
+  const scored = googleAlerts
+    .map((email) => ({
+      email,
+      score: topicScore(`${email.subject}\n${email.text}\n${stripHtml(email.html)}`),
+    }))
+    .sort((a, b) => b.score - a.score || b.email.internalDate - a.email.internalDate);
+  const selected = (scored.find((item) => item.score > 0) ?? scored[0])?.email;
+
+  if (!selected) {
+    debug.successfulGmailQuery = careerLabel ? `labelIds:[${careerLabel.id}] q:${query}` : `q:${query}`;
+    return {
+      sourceLabel,
+      accessToken,
+      messagesFound: debug.labelSearchMessagesFound || debug.fallbackSearchMessagesFound,
+      emails: [],
+      debug,
+      successfulQuery: debug.successfulGmailQuery,
+    };
+  }
+
+  const selectedFromPrimary = primaryIds.has(selected.id);
+  const selectedFromFallback = fallbackIds.has(selected.id);
+  debug.successfulGmailQuery =
+    careerLabel && selectedFromPrimary
+      ? `labelIds:[${careerLabel.id}] q:${query}`
+      : selectedFromFallback
+        ? `q:${query}`
+        : careerLabel
+          ? `labelIds:[${careerLabel.id}] q:${query}`
+          : `q:${query}`;
+  debug.latestGoogleAlertSubject = selected.subject;
+  debug.latestGoogleAlertTimestamp = selected.date;
+  debug.articleLinksExtracted = selected.links.length;
+  logDebug(
+    debug,
+    `Latest matching Google Alert subject="${selected.subject}" timestamp="${selected.date}" links=${selected.links.length} successfulQuery="${debug.successfulGmailQuery}"`,
+  );
+
+  return {
+    sourceLabel,
+    accessToken,
+    messagesFound: careerLabel ? debug.labelSearchMessagesFound : debug.fallbackSearchMessagesFound,
+    emails: [selected],
+    debug,
+    successfulQuery: debug.successfulGmailQuery,
+  };
+}
+
+function dedupeLinks(emails: GoogleAlertEmail[]): ExtractedAlertLink[] {
+  const seen = new Set<string>();
+  const out: ExtractedAlertLink[] = [];
+  for (const link of emails.flatMap((email) => email.links)) {
+    const key = urlKey(link.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(link);
+    if (out.length >= MAX_LINKS) break;
+  }
+  console.log(`[GEO_AI_BRIEF] Links extracted=${out.length}`);
+  return out;
 }
 
 async function fetchWithTimeout(url: string): Promise<Response> {
@@ -204,8 +875,8 @@ async function fetchWithTimeout(url: string): Promise<Response> {
       redirect: "follow",
       signal: controller.signal,
       headers: {
-        "User-Agent": "SWIFT/1.0 (GEO x AI Daily Brief)",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "User-Agent": "SWIFT/1.0 GEO x AI Daily Brief",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
       },
     });
   } finally {
@@ -213,145 +884,663 @@ async function fetchWithTimeout(url: string): Promise<Response> {
   }
 }
 
-async function fetchReadablePages(links: GeoAiBriefSource[]) {
-  const fetched: Array<GeoAiBriefSource & { text: string }> = [];
-  for (const link of links.slice(0, MAX_LINKS)) {
-      const originalUrl = link.url;
-      if (!originalUrl) continue;
-      try {
-      const resolved = await resolveGoogleNewsUrl(originalUrl, link.title).catch(() => ({
-        resolvedUrl: originalUrl,
-        resolvedOk: false,
-        resolvedSource: sourceFromUrl(originalUrl),
-        rejectedAssetCount: 0,
-        rejectedNonArticleCount: 0,
-        rejectedPublisherMismatchCount: 0,
-      }));
-      const url = resolved.resolvedUrl || originalUrl;
-      if (!isLikelyArticleUrl(url)) continue;
-      const res = await fetchWithTimeout(url);
-      if (!res.ok) continue;
-      const html = await res.text();
-      const text = stripHtml(html);
-      if (text.length < 220) continue;
-      fetched.push({
-        ...link,
-        url,
-        source: sourceFromUrl(url),
-        fetched: true,
-        text: text.slice(0, 7_000),
-      });
-    } catch {
-      // Failed or blocked links are intentionally ignored.
-    }
-  }
-  return fetched;
-}
-
-function parseBriefJson(raw: string): Omit<
-  GeoAiDailyBrief,
-  "reportType" | "title" | "generatedAt" | "lastUpdatedAt" | "diagnostics"
-> {
-  const fenced = stripMarkdownFences(raw);
-  const jsonText = extractFirstBalancedJsonObject(fenced) ?? fenced;
-  const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-  const strings = (value: unknown, fallback: string[] = []) =>
-    Array.isArray(value)
-      ? value.map((x) => (typeof x === "string" ? normalizeWhitespace(x) : "")).filter(Boolean).slice(0, 6)
-      : fallback;
-  const sources =
-    Array.isArray(parsed.sources)
-      ? parsed.sources
-          .map((x) => {
-            if (!x || typeof x !== "object") return null;
-            const o = x as Record<string, unknown>;
-            return {
-              title: typeof o.title === "string" ? normalizeWhitespace(o.title).slice(0, 180) : "Source",
-              url: typeof o.url === "string" ? o.url : undefined,
-              source: typeof o.source === "string" ? o.source : undefined,
-              fetched: typeof o.fetched === "boolean" ? o.fetched : undefined,
-            };
-          })
-          .filter(Boolean)
-          .slice(0, 12)
-          .map((x) => x as GeoAiBriefSource)
-      : [];
-
+function failureArticle(
+  link: ExtractedAlertLink,
+  reason: string,
+  debug: GeoAiDailyBriefDebug,
+  finalUrl = link.url,
+): ArticleInput {
+  const message = `${finalUrl}: ${reason}`;
+  debug.fetchErrors.push(message);
+  console.warn(`[GEO_AI_BRIEF] Article fetch failed url=${finalUrl} reason=${reason}`);
   return {
-    headline:
-      typeof parsed.headline === "string" && parsed.headline.trim()
-        ? normalizeWhitespace(parsed.headline)
-        : "GEO and AI search signals reviewed.",
-    executiveSummary:
-      typeof parsed.executiveSummary === "string" && parsed.executiveSummary.trim()
-        ? normalizeWhitespace(parsed.executiveSummary)
-        : "",
-    keyDevelopments: strings(parsed.keyDevelopments),
-    implications: strings(parsed.implications),
-    recommendedActions: strings(parsed.recommendedActions),
-    sources,
+    ...link,
+    finalUrl,
+    content: link.snippet,
+    contentFetched: false,
+    contentUnavailableReason: reason || "blocked",
   };
 }
 
-function buildPrompt(args: {
-  emails: ParsedDigestEmail[];
-  pages: Array<GeoAiBriefSource & { text: string }>;
+async function fetchArticle(
+  link: ExtractedAlertLink,
+  debug: GeoAiDailyBriefDebug,
+): Promise<ArticleInput> {
+  const initialUrl = unwrapGoogleRedirectUrl(link.url);
+  let finalUrl = initialUrl;
+  try {
+    const host = new URL(initialUrl).hostname.toLowerCase();
+    if (host === "news.google.com" || host.endsWith(".news.google.com")) {
+      const resolved = await resolveGoogleNewsUrl(initialUrl, link.title);
+      finalUrl = resolved.resolvedUrl || initialUrl;
+    }
+  } catch {
+    finalUrl = initialUrl;
+  }
+
+  try {
+    if (isUtilityLink(finalUrl, link.title)) {
+      return failureArticle(link, "blocked utility link", debug, finalUrl);
+    }
+
+    const response = await fetchWithTimeout(finalUrl);
+    const responseUrl = response.url || finalUrl;
+    if (!response.ok) {
+      return failureArticle(link, `blocked HTTP ${response.status}`, debug, responseUrl);
+    }
+
+    const contentType = response.headers.get("content-type")?.toLowerCase() || "";
+    if (contentType && !contentType.includes("html") && !contentType.includes("text")) {
+      return failureArticle(link, `blocked unsupported content type: ${contentType}`, debug, responseUrl);
+    }
+
+    const html = await response.text();
+    const text = stripHtml(html);
+    if (text.length < 260) {
+      return failureArticle(link, "blocked or readable content too short", debug, responseUrl);
+    }
+
+    debug.articleLinksFetched += 1;
+    console.log(`[GEO_AI_BRIEF] Article fetch success url=${responseUrl}`);
+    return {
+      ...link,
+      url: responseUrl,
+      finalUrl: responseUrl,
+      publication: sourceFromUrl(responseUrl),
+      content: text.slice(0, MAX_ARTICLE_CHARS),
+      contentFetched: true,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "fetch blocked";
+    return failureArticle(link, reason, debug, finalUrl);
+  }
+}
+
+async function fetchArticles(
+  links: ExtractedAlertLink[],
+  debug: GeoAiDailyBriefDebug,
+): Promise<ArticleInput[]> {
+  const out: ArticleInput[] = [];
+  for (let i = 0; i < links.length; i += ARTICLE_FETCH_CONCURRENCY) {
+    const batch = links.slice(i, i + ARTICLE_FETCH_CONCURRENCY);
+    out.push(...(await Promise.all(batch.map((link) => fetchArticle(link, debug)))));
+  }
+  const fetched = out.filter((article) => article.contentFetched).length;
+  console.log(`[GEO_AI_BRIEF] Article fetch complete success=${fetched}; failed=${out.length - fetched}`);
+  return out;
+}
+
+function buildAnalysisPrompt(args: {
+  emails: GoogleAlertEmail[];
+  articles: ArticleInput[];
+  digestDate: string;
 }) {
   const emailText = args.emails
-    .map((email, idx) =>
+    .map((email, index) =>
       [
-        `EMAIL ${idx + 1}`,
+        `EMAIL ${index + 1}`,
         `Subject: ${email.subject}`,
         `From: ${email.from}`,
         `Date: ${email.date}`,
         `Body: ${email.text}`,
-        `Links: ${email.links.map((l) => `${l.title} (${l.url})`).join("; ")}`,
+        `Links: ${email.links.map((link) => `${link.title} (${link.url})`).join("; ")}`,
       ].join("\n"),
     )
     .join("\n\n")
-    .slice(0, MAX_EMAIL_CHARS);
+    .slice(0, MAX_EMAIL_PROMPT_CHARS);
 
-  const pageText = args.pages
-    .map((page, idx) =>
+  const articleText = args.articles
+    .map((article, index) =>
       [
-        `PAGE ${idx + 1}`,
-        `Title: ${page.title}`,
-        `Source: ${page.source}`,
-        `URL: ${page.url}`,
-        `Readable text: ${page.text}`,
+        `SOURCE ${index + 1}`,
+        `Title: ${article.title}`,
+        `Publication/source: ${article.publication}`,
+        `URL: ${article.finalUrl}`,
+        `Google Alert snippet: ${article.snippet || "No snippet available."}`,
+        `Article content fetched: ${article.contentFetched ? "yes" : "no"}`,
+        article.contentFetched
+          ? `Article text: ${article.content}`
+          : `Article text: content unavailable (${article.contentUnavailableReason || "blocked"}). Analyse from the title/snippet only and mark contentFetched false.`,
       ].join("\n"),
     )
     .join("\n\n")
-    .slice(0, MAX_PAGE_CHARS);
+    .slice(0, MAX_ARTICLE_PROMPT_CHARS);
+
+  return [
+    `Digest date: ${args.digestDate}`,
+    "You are SWIFT's executive GEO, AI Search, AI visibility, AI Ads, AI discovery, and answer-engine intelligence analyst.",
+    "Analyse linked article content first. If a linked article could not be fetched, use only the Google Alert title/snippet for that source and mark contentFetched false.",
+    "Use the latest CareerIntel/Market Google Alert as source of truth.",
+    "Mention Semrush and Adobe relevance where supported by evidence.",
+    "Include GTM/Sales and HRBP implications only where clearly relevant.",
+    "Do not add Web3, crypto, employment-law, expansion, downsizing, weekly snapshot, or strong-signal sections.",
+    "",
+    "GOOGLE ALERT EMAIL",
+    emailText || "No email body available.",
+    "",
+    "LINKED ARTICLE CONTENT AND FALLBACKS",
+    articleText || "No links were extracted. Use only the email body and clearly explain the limitation.",
+  ].join("\n");
+}
+
+const responseFormat = {
+  type: "json_schema",
+  json_schema: {
+    name: "geo_ai_daily_brief",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "executiveSignal",
+        "whatHappenedToday",
+        "whyItMattersForSemrushAdobe",
+        "gtmSalesImplication",
+        "hrbpImplication",
+        "recommendedAction",
+        "oneLineSummary",
+        "sourceLinks",
+      ],
+      properties: {
+        executiveSignal: { type: "string" },
+        whatHappenedToday: { type: "string" },
+        whyItMattersForSemrushAdobe: { type: "string" },
+        gtmSalesImplication: { type: "string" },
+        hrbpImplication: { type: "string" },
+        recommendedAction: { type: "string" },
+        oneLineSummary: { type: "string" },
+        sourceLinks: {
+          type: "array",
+          minItems: 0,
+          maxItems: 12,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "title",
+              "publication",
+              "url",
+              "shortSummary",
+              "relevanceReason",
+              "contentFetched",
+            ],
+            properties: {
+              title: { type: "string" },
+              publication: { type: "string" },
+              url: { type: "string" },
+              shortSummary: { type: "string" },
+              relevanceReason: { type: "string" },
+              contentFetched: { type: "boolean" },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+async function runOpenAiAnalysis(args: {
+  emails: GoogleAlertEmail[];
+  articles: ArticleInput[];
+  digestDate: string;
+}): Promise<OpenAiBriefPayload> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("OPENAI_API_KEY is not configured");
+
+  const response = await fetch(getOpenAiUrl(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: getOpenAiModel(),
+      temperature: 0.2,
+      max_tokens: 2200,
+      response_format: responseFormat,
+      messages: [
+        {
+          role: "system",
+          content:
+            "Return only structured JSON that matches the schema. Be concise, evidence-led, and executive-ready.",
+        },
+        {
+          role: "user",
+          content: buildAnalysisPrompt(args),
+        },
+      ],
+    }),
+  });
+
+  const rawText = await response.text();
+  if (!response.ok) {
+    console.error("[GEO_AI_BRIEF] OpenAI failed", rawText.slice(0, 900));
+    throw new Error(`OpenAI analysis failed: HTTP ${response.status}`);
+  }
+
+  const parsed = JSON.parse(rawText) as OpenAiChatResponse;
+  const content = parsed.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error(parsed.error?.message || "OpenAI response did not include JSON content");
+  }
+
+  console.log("[GEO_AI_BRIEF] OpenAI analysis succeeded");
+  return coerceOpenAiPayload(JSON.parse(content), args.articles);
+}
+
+function stringField(record: Record<string, unknown>, key: string, fallback = ""): string {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? normalizeWhitespace(value) : fallback;
+}
+
+function coerceOpenAiPayload(value: unknown, articles: ArticleInput[]): OpenAiBriefPayload {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const sourceByKey = new Map<string, ArticleInput>();
+  for (const article of articles) {
+    sourceByKey.set(urlKey(article.finalUrl), article);
+    sourceByKey.set(urlKey(article.url), article);
+  }
+
+  const sourceLinks = Array.isArray(record.sourceLinks)
+    ? record.sourceLinks
+        .map((item) => {
+          if (!item || typeof item !== "object") return null;
+          const source = item as Record<string, unknown>;
+          const rawUrl = stringField(source, "url");
+          if (!rawUrl || !isHttpUrl(rawUrl)) return null;
+          const matched = sourceByKey.get(urlKey(rawUrl));
+          return {
+            title: stringField(source, "title", matched?.title || sourceFromUrl(rawUrl)).slice(0, 220),
+            publication: stringField(
+              source,
+              "publication",
+              matched?.publication || sourceFromUrl(rawUrl),
+            ).slice(0, 120),
+            url: matched?.finalUrl || rawUrl,
+            shortSummary: stringField(source, "shortSummary", matched?.snippet || "").slice(0, 420),
+            relevanceReason: stringField(source, "relevanceReason", "Relevant to GEO x AI visibility.").slice(0, 420),
+            contentFetched: matched?.contentFetched ?? source.contentFetched === true,
+          };
+        })
+        .filter((item): item is GeoAiBriefSource => Boolean(item))
+        .slice(0, 12)
+    : [];
+
+  if (!sourceLinks.length) {
+    sourceLinks.push(
+      ...articles.slice(0, 12).map((article) => ({
+        title: article.title,
+        publication: article.publication,
+        url: article.finalUrl,
+        shortSummary: article.snippet || "Google Alert source.",
+        relevanceReason: "Used as evidence for the GEO x AI Daily Brief.",
+        contentFetched: article.contentFetched,
+      })),
+    );
+  }
 
   return {
-    system: [
-      "You are SWIFT's executive GEO and AI-search intelligence analyst.",
-      "Return strict JSON only. Do not include markdown.",
-      "Focus on Generative Engine Optimization, AI Search, AI visibility, AI Ads, AI discovery, and answer engines.",
-      "Mention Semrush or Adobe only when present in the evidence.",
-      "Mention HRBP, GTM, or Sales implications only where clearly relevant.",
-      "Do not add Web3, crypto, employment-law, expansion, or downsizing sections.",
-    ].join(" "),
-    user: [
-      "Create the latest GEO x AI Daily Brief from these Gmail digests and fetched linked pages.",
-      "Use this exact JSON shape:",
-      "{",
-      '  "headline": "one executive headline",',
-      '  "executiveSummary": "4-7 sentence executive-quality summary",',
-      '  "keyDevelopments": ["3-5 concise developments"],',
-      '  "implications": ["2-4 implications for GEO/AI visibility/AI ads/discovery"],',
-      '  "recommendedActions": ["2-4 concrete actions for this week"],',
-      '  "sources": [{"title":"source title","url":"https://...","source":"publisher","fetched":true}]',
-      "}",
-      "",
-      "GMAIL DIGESTS:",
-      emailText || "No digest body available.",
-      "",
-      "FETCHED LINKED PAGES:",
-      pageText || "No linked pages could be fetched; rely only on email content.",
-    ].join("\n"),
+    executiveSignal: stringField(record, "executiveSignal"),
+    whatHappenedToday: stringField(record, "whatHappenedToday"),
+    whyItMattersForSemrushAdobe: stringField(record, "whyItMattersForSemrushAdobe"),
+    gtmSalesImplication: stringField(record, "gtmSalesImplication"),
+    hrbpImplication: stringField(record, "hrbpImplication"),
+    recommendedAction: stringField(record, "recommendedAction"),
+    oneLineSummary: stringField(record, "oneLineSummary"),
+    sourceLinks,
   };
+}
+
+function buildWarnings(articles: ArticleInput[]): string[] {
+  const warnings: string[] = [];
+  const failures = articles.filter((article) => !article.contentFetched);
+  if (articles.length && failures.length === articles.length) {
+    warnings.push("Article content could not be fetched; this brief uses Google Alert titles and snippets.");
+  } else if (failures.length) {
+    warnings.push(
+      `${failures.length} source${failures.length === 1 ? "" : "s"} could not be fetched and were analysed from Google Alert snippets.`,
+    );
+  }
+  return warnings;
+}
+
+function buildBrief(args: {
+  payload: OpenAiBriefPayload;
+  articles: ArticleInput[];
+  generatedAt: string;
+  digestDate: string;
+  trigger: BriefTrigger;
+  diagnostics: GeoAiDailyBrief["diagnostics"];
+  debug: GeoAiDailyBriefDebug;
+}): GeoAiDailyBrief {
+  const emailSubject = `GEO x AI Daily Brief — ${args.digestDate}`;
+  const executiveSummary = [
+    args.payload.executiveSignal,
+    args.payload.whatHappenedToday,
+    args.payload.whyItMattersForSemrushAdobe,
+    args.payload.recommendedAction,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return {
+    reportType: "geo_ai_daily_brief",
+    title: "GEO x AI Daily Brief",
+    generatedAt: args.generatedAt,
+    lastUpdatedAt: args.generatedAt,
+    digestDate: args.digestDate,
+    trigger: args.trigger,
+    headline: args.payload.oneLineSummary || args.payload.executiveSignal,
+    executiveSignal: args.payload.executiveSignal,
+    whatHappenedToday: args.payload.whatHappenedToday,
+    whyItMattersForSemrushAdobe: args.payload.whyItMattersForSemrushAdobe,
+    gtmSalesImplication: args.payload.gtmSalesImplication,
+    hrbpImplication: args.payload.hrbpImplication,
+    recommendedAction: args.payload.recommendedAction,
+    oneLineSummary: args.payload.oneLineSummary,
+    executiveSummary,
+    topSignals: [
+      args.payload.executiveSignal,
+      args.payload.oneLineSummary,
+      args.payload.recommendedAction,
+    ].filter(Boolean),
+    marketMovement: args.payload.whatHappenedToday,
+    geoAiSearchAdsImplications: args.payload.gtmSalesImplication,
+    semrushAdobeRelevance: args.payload.whyItMattersForSemrushAdobe,
+    hrbpOrgHiringRelevance: args.payload.hrbpImplication,
+    sourceLinks: args.payload.sourceLinks,
+    warnings: buildWarnings(args.articles),
+    email: {
+      to: getDigestRecipient(),
+      subject: emailSubject,
+      sent: false,
+      labelApplied: false,
+    },
+    gmailDebug: args.debug,
+    diagnostics: args.diagnostics,
+  };
+}
+
+function buildEmailHtml(brief: GeoAiDailyBrief): string {
+  const listItems = brief.topSignals
+    .map((item) => `<li style="margin:0 0 8px;">${escapeHtml(item)}</li>`)
+    .join("");
+  const sourceItems = brief.sourceLinks
+    .map(
+      (source) => `
+        <li style="margin:0 0 14px;">
+          <a href="${escapeHtml(source.url)}" style="color:#93c5fd;text-decoration:none;font-weight:700;">${escapeHtml(source.title)}</a>
+          <div style="color:#94a3b8;font-size:13px;margin-top:3px;">${escapeHtml(source.publication)} · ${source.contentFetched ? "article fetched" : "content unavailable"}</div>
+          <div style="color:#cbd5e1;font-size:14px;margin-top:5px;">${escapeHtml(source.shortSummary)}</div>
+          <div style="color:#a7f3d0;font-size:13px;margin-top:5px;">${escapeHtml(source.relevanceReason)}</div>
+        </li>
+      `,
+    )
+    .join("");
+  const warnings = brief.warnings
+    .map((warning) => `<p style="margin:8px 0;color:#fde68a;">${escapeHtml(warning)}</p>`)
+    .join("");
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0;background:#020617;color:#e5e7eb;font-family:Inter,Arial,sans-serif;">
+        <div style="max-width:760px;margin:0 auto;padding:28px 22px;">
+          <p style="margin:0 0 8px;color:#38bdf8;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;">SWIFT</p>
+          <h1 style="margin:0 0 8px;color:#f8fafc;font-size:28px;line-height:1.2;">GEO x AI Daily Brief</h1>
+          <p style="margin:0 0 24px;color:#94a3b8;font-size:14px;">Generated ${escapeHtml(brief.digestDate)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">Executive Signal</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.executiveSignal)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">What Happened Today</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.whatHappenedToday)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">Why It Matters for Semrush / Adobe</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.whyItMattersForSemrushAdobe)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">GTM / Sales Implication</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.gtmSalesImplication)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">HRBP Implication</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.hrbpImplication)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">Recommended Action</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.recommendedAction)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">One-line Summary</h2>
+          <p style="margin:0;color:#cbd5e1;font-size:15px;line-height:1.7;">${escapeHtml(brief.oneLineSummary)}</p>
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">Top Signals</h2>
+          <ul style="margin:0;padding-left:20px;color:#cbd5e1;font-size:15px;line-height:1.6;">${listItems}</ul>
+
+          ${warnings ? `<div style="margin:24px 0;padding:12px 14px;border:1px solid rgba(251,191,36,.32);background:rgba(120,53,15,.24);border-radius:8px;">${warnings}</div>` : ""}
+
+          <h2 style="margin:26px 0 10px;color:#f8fafc;font-size:18px;">Source Links</h2>
+          <ul style="margin:0;padding-left:20px;color:#cbd5e1;font-size:15px;line-height:1.6;">${sourceItems}</ul>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+function buildEmailText(brief: GeoAiDailyBrief): string {
+  return [
+    "GEO x AI Daily Brief",
+    `Generated ${brief.digestDate}`,
+    "",
+    "Executive Signal",
+    brief.executiveSignal,
+    "",
+    "What Happened Today",
+    brief.whatHappenedToday,
+    "",
+    "Why It Matters for Semrush / Adobe",
+    brief.whyItMattersForSemrushAdobe,
+    "",
+    "GTM / Sales Implication",
+    brief.gtmSalesImplication,
+    "",
+    "HRBP Implication",
+    brief.hrbpImplication,
+    "",
+    "Recommended Action",
+    brief.recommendedAction,
+    "",
+    "One-line Summary",
+    brief.oneLineSummary,
+    "",
+    "Source Links",
+    ...brief.sourceLinks.map(
+      (source) =>
+        `- ${source.title} (${source.publication})\n  ${source.url}\n  ${source.shortSummary}\n  ${source.relevanceReason}\n  Fetched: ${source.contentFetched ? "yes" : "no"}`,
+    ),
+  ].join("\n");
+}
+
+function encodeHeader(value: string): string {
+  if (/^[\x00-\x7F]*$/.test(value)) return value;
+  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+}
+
+function makeBoundary() {
+  return `swift-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function buildRawEmail(brief: GeoAiDailyBrief): string {
+  const boundary = makeBoundary();
+  const from = process.env.GMAIL_USER?.trim() || getDigestRecipient();
+  const html = buildEmailHtml(brief);
+  const text = buildEmailText(brief);
+  return [
+    `From: SWIFT <${from}>`,
+    `To: ${brief.email.to}`,
+    `Subject: ${encodeHeader(brief.email.subject)}`,
+    `Date: ${new Date(brief.generatedAt).toUTCString()}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    text,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: 8bit",
+    "",
+    html,
+    "",
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+}
+
+function encodeBase64Url(input: string): string {
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+async function findGmailLabelByName(accessToken: string, labelName: string): Promise<GmailLabel | null> {
+  const labels = await gmailApi<GmailLabelsResponse>(accessToken, "/labels");
+  return (labels.labels ?? []).find((label) => label.name === labelName) ?? null;
+}
+
+async function getOrCreateGmailLabel(args: {
+  accessToken: string;
+  labelName: string;
+  debug: GeoAiDailyBriefDebug;
+  create: boolean;
+}): Promise<GmailLabel | null> {
+  const existing = await findGmailLabelByName(args.accessToken, args.labelName);
+  if (existing) return existing;
+  if (!args.create) return null;
+
+  const created = await gmailApi<GmailLabel>(args.accessToken, "/labels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: args.labelName,
+      labelListVisibility: "labelShow",
+      messageListVisibility: "show",
+    }),
+  });
+  logDebug(args.debug, `Gmail label created name="${args.labelName}" id="${created.id}"`);
+  return created;
+}
+
+async function sendAndLabelDigestEmail(
+  brief: GeoAiDailyBrief,
+  accessToken: string,
+  debug: GeoAiDailyBriefDebug,
+): Promise<GeoAiDailyBrief["email"]> {
+  const rawEmail = buildRawEmail(brief);
+  const email = { ...brief.email };
+
+  try {
+    const sent = await gmailApi<GmailSendMessageResponse>(accessToken, "/messages/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw: encodeBase64Url(rawEmail) }),
+    });
+    if (!sent.id) throw new Error("Gmail API did not return a sent message id");
+    email.messageId = sent.id;
+    email.sent = true;
+    logDebug(debug, `Email sent through Gmail API messageId="${sent.id}" to="${brief.email.to}"`);
+  } catch (error) {
+    email.error = error instanceof Error ? error.message : "Email send failed";
+    console.error("[GEO_AI_BRIEF] Email send failed", error);
+    return email;
+  }
+
+  try {
+    const label = await getOrCreateGmailLabel({
+      accessToken,
+      labelName: getDigestLabelName(),
+      debug,
+      create: true,
+    });
+    if (!label?.id || !email.messageId) {
+      throw new Error("Gmail digest label could not be resolved");
+    }
+    await gmailApi<Record<string, unknown>>(
+      accessToken,
+      `/messages/${encodeURIComponent(email.messageId)}/modify`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addLabelIds: [label.id] }),
+      },
+    );
+    email.labelApplied = true;
+    logDebug(
+      debug,
+      `Gmail label applied label="${label.name}" id="${label.id}" messageId="${email.messageId}"`,
+    );
+  } catch (error) {
+    email.error = error instanceof Error ? error.message : "Gmail label apply failed";
+    console.error("[GEO_AI_BRIEF] Gmail label apply failed", error);
+  }
+
+  return email;
+}
+
+async function findStoredScheduledBriefForDate(
+  digestDate: string,
+): Promise<GeoAiDailyBrief | null> {
+  const latest = await getLatestRuns(50);
+  const row = latest.runs.find((run) => {
+    const report = run.report_json;
+    if (!report || typeof report !== "object") return false;
+    const brief = report as Partial<GeoAiDailyBrief>;
+    return (
+      brief.reportType === "geo_ai_daily_brief" &&
+      brief.digestDate === digestDate &&
+      brief.trigger === "scheduled" &&
+      brief.email?.sent === true
+    );
+  });
+  return row ? (row.report_json as GeoAiDailyBrief) : null;
+}
+
+async function hasDigestEmailForDate(
+  digestDate: string,
+  accessToken: string,
+  debug: GeoAiDailyBriefDebug,
+): Promise<boolean> {
+  const digestLabel = getDigestLabelName();
+  try {
+    const label = await getOrCreateGmailLabel({
+      accessToken,
+      labelName: digestLabel,
+      debug,
+      create: false,
+    });
+    if (!label?.id) {
+      logDebug(debug, `Digest duplicate check skipped; label "${digestLabel}" does not exist yet`);
+      return false;
+    }
+    const expectedSubject = `GEO x AI Daily Brief — ${digestDate}`;
+    const query = `subject:"${expectedSubject}" newer_than:7d`;
+    const messages = await listGmailMessages({
+      accessToken,
+      labelId: label.id,
+      query,
+    });
+    const found = messages.resultSizeEstimate ?? messages.messages?.length ?? 0;
+    logDebug(
+      debug,
+      `Digest duplicate Gmail API check labelIds=["${label.id}"] q="${query}" found=${found}`,
+    );
+    return found > 0;
+  } catch (error) {
+    console.warn("[GEO_AI_BRIEF] Digest duplicate Gmail API check skipped", error);
+    return false;
+  }
 }
 
 export async function getLatestGeoAiDailyBrief(): Promise<{
@@ -362,83 +1551,149 @@ export async function getLatestGeoAiDailyBrief(): Promise<{
   const latest = await getLatestRuns(30);
   const row = latest.runs.find((run) => {
     const report = run.report_json;
-    return Boolean(report && typeof report === "object" && (report as Record<string, unknown>).reportType === "geo_ai_daily_brief");
+    return Boolean(
+      report &&
+        typeof report === "object" &&
+        (report as Record<string, unknown>).reportType === "geo_ai_daily_brief",
+    );
   });
   if (!row) return { brief: null, storageConfigured: !latest.error, error: latest.error };
   const report = row.report_json as GeoAiDailyBrief;
   return { brief: report, storageConfigured: true };
 }
 
-export async function generateGeoAiDailyBrief(): Promise<{
-  brief: GeoAiDailyBrief | null;
-  storage: { saved: boolean; runId?: string; error?: string };
-  empty?: boolean;
-}> {
-  if (!isAiConfigured()) {
-    throw new Error("DeepSeek AI provider is not configured");
+export async function generateGeoAiDailyBrief(
+  options: GenerateGeoAiDailyBriefOptions = {},
+): Promise<GenerateGeoAiDailyBriefResult> {
+  const trigger = options.trigger ?? "manual";
+  const lookbackHours = options.lookbackHours ?? DEFAULT_LOOKBACK_HOURS;
+  const shouldSendEmail = options.sendEmail ?? true;
+  const forceSendEmail = options.forceSendEmail ?? trigger === "manual";
+  const generatedAt = new Date().toISOString();
+  const digestDate = londonDateKey(new Date(generatedAt));
+  const sourceLabel = getSourceLabelName();
+  const digestLabel = getDigestLabelName();
+
+  if (trigger === "scheduled" && !forceSendEmail) {
+    const storedDuplicate = await findStoredScheduledBriefForDate(digestDate);
+    if (storedDuplicate) {
+      storedDuplicate.diagnostics.duplicateScheduledEmailSkipped = true;
+      console.log(`[GEO_AI_BRIEF] Scheduled duplicate skipped from storage date=${digestDate}`);
+      return {
+        brief: storedDuplicate,
+        storage: { saved: true },
+        duplicateSkipped: true,
+        message: `Scheduled GEO x AI brief email already exists for ${digestDate}`,
+        debug: storedDuplicate.gmailDebug,
+      };
+    }
   }
 
-  const { label, emails } = await fetchDigestEmails();
+  const {
+    accessToken,
+    messagesFound,
+    emails,
+    debug,
+    successfulQuery,
+  } = await fetchGoogleAlertEmails();
+
+  if (trigger === "scheduled" && !forceSendEmail) {
+    const labelledDuplicate = await hasDigestEmailForDate(digestDate, accessToken, debug);
+    if (labelledDuplicate) {
+      console.log(`[GEO_AI_BRIEF] Scheduled duplicate skipped from Gmail label date=${digestDate}`);
+      return {
+        brief: null,
+        storage: { saved: false, error: "Duplicate scheduled digest already labelled in Gmail" },
+        duplicateSkipped: true,
+        message: `Scheduled GEO x AI brief email already exists for ${digestDate}`,
+        debug,
+      };
+    }
+  }
+
   if (!emails.length) {
+    const message = `No Google Alert found in CareerIntel/Market. Gmail API label search found ${debug.labelSearchMessagesFound}; fallback found ${debug.fallbackSearchMessagesFound}.`;
+    debug.error = message;
+    console.warn(`[GEO_AI_BRIEF] ${message}`);
     return {
       brief: null,
       empty: true,
-      storage: { saved: false, error: "No recent emails found under Gmail label" },
+      storage: { saved: false, error: message },
+      message,
+      debug,
     };
   }
 
-  const allLinks = emails.flatMap((email) => email.links);
-  const pages = await fetchReadablePages(allLinks);
-  const prompt = buildPrompt({ emails, pages });
-  const aiText = await invokeAiJsonStrict({ ...prompt, temperature: 0.2, maxTokens: 1800 });
-  const generatedAt = new Date().toISOString();
-  const parsed = parseBriefJson(aiText);
+  const links = dedupeLinks(emails);
+  debug.articleLinksExtracted = links.length;
+  const articles = await fetchArticles(links, debug);
+  const fetchedCount = articles.filter((article) => article.contentFetched).length;
+  debug.articleLinksFetched = fetchedCount;
 
-  const sourceByUrl = new Map<string, GeoAiBriefSource>();
-  for (const source of [...parsed.sources, ...pages, ...allLinks]) {
-    if (!source.url) continue;
-    sourceByUrl.set(source.url, {
-      title: source.title,
-      url: source.url,
-      source: source.source,
-      fetched: source.fetched,
-    });
-  }
-
-  const brief: GeoAiDailyBrief = {
-    reportType: "geo_ai_daily_brief",
-    title: "GEO x AI Daily Brief",
-    generatedAt,
-    lastUpdatedAt: generatedAt,
-    ...parsed,
-    sources: Array.from(sourceByUrl.values()).slice(0, 12),
-    diagnostics: {
-      label,
-      emailsRead: emails.length,
-      linksFound: allLinks.length,
-      linksFetched: pages.length,
-    },
+  const diagnostics: GeoAiDailyBrief["diagnostics"] = {
+    sourceLabel,
+    digestLabel,
+    lookbackHours,
+    gmailMessagesFound: messagesFound,
+    googleAlertMessagesProcessed: emails.length,
+    linksExtracted: links.length,
+    articlesFetched: fetchedCount,
+    articleFetchFailures: Math.max(0, articles.length - fetchedCount),
   };
 
+  let payload: OpenAiBriefPayload;
+  try {
+    payload = await runOpenAiAnalysis({ emails, articles, digestDate });
+  } catch (error) {
+    console.error("[GEO_AI_BRIEF] OpenAI analysis failed", error);
+    throw new Error(error instanceof Error ? error.message : "OpenAI analysis failed");
+  }
+
+  const brief = buildBrief({
+    payload,
+    articles,
+    generatedAt,
+    digestDate,
+    trigger,
+    diagnostics,
+    debug,
+  });
+
+  if (shouldSendEmail) {
+    brief.email = await sendAndLabelDigestEmail(brief, accessToken, debug);
+  }
+
   const storage = await saveIntelligenceRun({
-    runType: "manual",
+    runType: trigger,
     report: brief as unknown as Record<string, unknown>,
-    rawSignalCount: allLinks.length,
-    cleanSignalCount: pages.length,
-    marketSignals: brief.sources.map((source) => ({
+    rawSignalCount: links.length,
+    cleanSignalCount: fetchedCount,
+    emailStatus: brief.email.sent ? "sent" : brief.email.error ? "error" : "skipped",
+    emailMessageId: brief.email.messageId,
+    marketSignals: brief.sourceLinks.map((source) => ({
       title: source.title,
       url: source.url,
-      sourceName: source.source,
+      sourceName: source.publication,
       category: "geo_ai_daily_brief",
       publishedAt: generatedAt,
-      summary: brief.headline,
-      whyItMatters: brief.executiveSummary,
-      hrbpImplication: brief.implications.join(" "),
+      summary: source.shortSummary,
+      whyItMatters: source.relevanceReason,
+      hrbpImplication: brief.hrbpImplication,
     })),
   });
 
   brief.diagnostics.storageSaved = storage.saved;
   if (storage.error) brief.diagnostics.storageError = storage.error;
 
-  return { brief, storage };
+  console.log(
+    `[GEO_AI_BRIEF] Run complete trigger=${trigger}; successfulGmailQuery=${JSON.stringify(
+      successfulQuery,
+    )}; emailSent=${brief.email.sent}; labelApplied=${brief.email.labelApplied}; storageSaved=${storage.saved}`,
+  );
+
+  return {
+    brief,
+    storage,
+    debug,
+  };
 }
