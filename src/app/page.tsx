@@ -246,7 +246,7 @@ function compactBriefSources(brief: GeoAiDailyBrief) {
           fetchStatus: source.fetchStatus || (source.contentFetched ? "fetched" : "content unavailable"),
         }));
 
-  return sources.slice(0, 5).map((source) => ({
+  return sources.map((source) => ({
     ...source,
     title: capDisplayText(source.title, 200),
     publisher: capDisplayText(source.publisher || source.domain, 120),
@@ -1370,9 +1370,9 @@ export default function Home() {
                     {compactBriefSources(geoBrief).length > 0 ? (
                       <div>
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Sources
+                          Sources · all extracted
                         </p>
-                        <ul className="mt-3 space-y-3">
+                        <ul className="mt-3 max-h-[34rem] space-y-3 overflow-y-auto pr-1">
                           {compactBriefSources(geoBrief).map((source, idx) => (
                             <li
                               key={`geo-source-${idx}-${source.url}`}

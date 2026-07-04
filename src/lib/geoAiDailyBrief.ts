@@ -13,12 +13,12 @@ const ARTICLE_FETCH_CONCURRENCY = 4;
 const FETCH_TIMEOUT_MS = 8_000;
 const MAX_ARTICLE_CHARS = 5_500;
 const MAX_ARTICLE_PROMPT_CHARS = 48_000;
-const MAX_DISPLAY_SOURCES = 5;
 const MAX_EXECUTIVE_SIGNAL_CHARS = 1_200;
 const MAX_SECTION_CHARS = 1_500;
 const MAX_SOURCE_TITLE_CHARS = 200;
 const MAX_SOURCE_SNIPPET_CHARS = 180;
 const MAX_ANALYSIS_SOURCES = 5;
+const MAX_EMAIL_SOURCES = 5;
 const DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_DEEPSEEK_MODEL = "deepseek-chat";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -1664,6 +1664,28 @@ function coerceOpenAiPayload(value: unknown, articles: ArticleInput[]): OpenAiBr
   };
 }
 
+function sourceLinksFromArticles(articles: ArticleInput[]): GeoAiBriefSource[] {
+  return articles
+    .filter((article) => cleanText(article.title) && !containsAlertBooleanQuery(article.title))
+    .map((article) => {
+      const url = cleanArticleUrl(article.finalUrl);
+      const publication = article.publication || sourceFromUrl(url);
+      return {
+        title: cleanSourceTitle(article.title, url),
+        publication,
+        publisher: publication,
+        domain: sourceDomain(url),
+        url,
+        shortSummary:
+          sanitizeBriefText(article.snippet, MAX_SOURCE_SNIPPET_CHARS) ||
+          "Article content unavailable; using title and source metadata.",
+        relevanceReason: "Used as evidence for the GEO x AI Daily Brief.",
+        contentFetched: article.contentFetched,
+        fetchStatus: article.contentFetched ? "fetched" : "content unavailable",
+      };
+    });
+}
+
 function compactSources(sourceLinks: GeoAiBriefSource[]): GeoAiBriefCompactSource[] {
   const seen = new Set<string>();
   const out: GeoAiBriefCompactSource[] = [];
@@ -1685,7 +1707,6 @@ function compactSources(sourceLinks: GeoAiBriefSource[]): GeoAiBriefCompactSourc
         ? truncateText(sanitizeBriefText(source.shortSummary, MAX_SOURCE_SNIPPET_CHARS), MAX_SOURCE_SNIPPET_CHARS)
         : undefined,
     });
-    if (out.length >= MAX_DISPLAY_SOURCES) break;
   }
   return out;
 }
@@ -1746,8 +1767,13 @@ function normalizeBrief(brief: GeoAiDailyBrief): GeoAiDailyBrief {
   next.geoAiSearchAdsImplications = next.gtmSalesImplication;
   next.semrushAdobeRelevance = next.whyItMattersForSemrushAdobe;
   next.hrbpOrgHiringRelevance = next.hrbpImplication;
-  next.sources = next.sources?.length ? next.sources.slice(0, MAX_DISPLAY_SOURCES) : compactSources(next.sourceLinks);
-  next.sourceLinks = next.sourceLinks.slice(0, MAX_DISPLAY_SOURCES);
+  const compactSourceLinks = compactSources(next.sourceLinks);
+  next.sources =
+    compactSourceLinks.length > (next.sources?.length ?? 0)
+      ? compactSourceLinks
+      : next.sources?.length
+        ? next.sources
+        : compactSourceLinks;
 
   const completeness = Object.fromEntries(
     REQUIRED_BRIEF_FIELDS.map((key) => [key, Boolean(next[key]?.trim())]),
@@ -1806,7 +1832,9 @@ function buildBrief(args: {
   debug: GeoAiDailyBriefDebug;
 }): GeoAiDailyBrief {
   const emailSubject = `SWIFT GEO x AI Daily Brief — ${args.digestDate}`;
-  const compactSourceList = compactSources(args.payload.sourceLinks);
+  const displaySourceLinks = sourceLinksFromArticles(args.articles);
+  const sourceLinks = displaySourceLinks.length ? displaySourceLinks : args.payload.sourceLinks;
+  const compactSourceList = compactSources(sourceLinks);
   const executiveSummary = [
     args.payload.executiveSignal,
     args.payload.whatHappenedToday,
@@ -1842,7 +1870,7 @@ function buildBrief(args: {
     semrushAdobeRelevance: sanitizeBriefText(args.payload.whyItMattersForSemrushAdobe),
     hrbpOrgHiringRelevance: sanitizeBriefText(args.payload.hrbpImplication),
     sources: compactSourceList,
-    sourceLinks: args.payload.sourceLinks.slice(0, MAX_DISPLAY_SOURCES),
+    sourceLinks,
     warnings: buildWarnings(args.articles),
     email: {
       to: getDigestRecipient(),
@@ -1863,6 +1891,7 @@ function buildBrief(args: {
 
 function buildEmailHtml(brief: GeoAiDailyBrief): string {
   const sourceItems = (brief.sources?.length ? brief.sources : compactSources(brief.sourceLinks))
+    .slice(0, MAX_EMAIL_SOURCES)
     .map(
       (source) => `
         <li style="margin:0 0 14px;">
@@ -1928,7 +1957,10 @@ function buildEmailHtml(brief: GeoAiDailyBrief): string {
 }
 
 function buildEmailText(brief: GeoAiDailyBrief): string {
-  const sources = brief.sources?.length ? brief.sources : compactSources(brief.sourceLinks);
+  const sources = (brief.sources?.length ? brief.sources : compactSources(brief.sourceLinks)).slice(
+    0,
+    MAX_EMAIL_SOURCES,
+  );
   return [
     "GEO x AI Daily Brief",
     `Generated ${new Date(brief.generatedAt).toLocaleString()}`,
@@ -2279,7 +2311,7 @@ export async function generateGeoAiDailyBrief(
   const brief = normalizeBrief(
     buildBrief({
       payload,
-      articles: analysisArticles,
+      articles,
       generatedAt,
       digestDate,
       trigger,
