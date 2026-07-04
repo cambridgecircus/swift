@@ -3,6 +3,9 @@ import { generateGeoAiDailyBrief } from "@/lib/geoAiDailyBrief";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Vercel cron uses UTC, and the Hobby plan must keep this to one daily run.
+// The configured run should land after the usual Google Alert arrival window;
+// this guard keeps scheduled sends in the intended 09:15 UK window.
 function londonScheduleWindow(date = new Date()): boolean {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Europe/London",

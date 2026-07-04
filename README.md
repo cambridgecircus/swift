@@ -106,4 +106,4 @@ Copy the printed token into your local `.env.local` and Vercel Production enviro
 
 When Supabase is configured, briefs are saved to the existing `swift_runs` storage pattern and scheduled duplicate emails are blocked by stored run history plus a Gmail-label subject check. Without Supabase, the refresh endpoint still returns the generated brief directly.
 
-Vercel cron runs in UTC, so `vercel.json` schedules both 08:15 and 09:15 UTC. The `/api/daily-report` route only performs the run when London local time is within the 09:15 UK window.
+Vercel cron runs in UTC, and the Hobby plan must keep this to one daily run. `vercel.json` schedules `/api/daily-report` at `15 8 * * *` (08:15 UTC, 09:15 UK during British Summer Time) so the scheduled job runs after the usual Google Alert arrival window. The manual Dashboard Refresh brief button remains available anytime and uses the same GEO brief generator.
