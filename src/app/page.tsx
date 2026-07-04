@@ -207,6 +207,39 @@ function formatDateTime(date: Date | null) {
   return date.toLocaleString();
 }
 
+function capDisplayText(input: string | null | undefined, maxLength = 1500) {
+  const text = String(input || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trim().replace(/[,:;.-]+$/g, "")}...`;
+}
+
+function sourceDomain(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "source";
+  }
+}
+
+function compactBriefSources(brief: GeoAiDailyBrief) {
+  const sources =
+    Array.isArray(brief.sources) && brief.sources.length > 0
+      ? brief.sources
+      : brief.sourceLinks.map((source) => ({
+          title: source.title,
+          publisher: source.publisher || source.publication || source.domain || sourceDomain(source.url),
+          domain: source.domain || sourceDomain(source.url),
+          url: source.url,
+          fetchStatus: source.fetchStatus || (source.contentFetched ? "fetched" : "content unavailable"),
+        }));
+
+  return sources.slice(0, 5).map((source) => ({
+    ...source,
+    title: capDisplayText(source.title, 200),
+    publisher: capDisplayText(source.publisher || source.domain, 120),
+  }));
+}
+
 function GeoBriefDebugBox({ debug }: { debug: GeoAiDailyBriefDebug | null }) {
   if (!debug) return null;
   const rows: Array<[string, string]> = [
@@ -223,35 +256,43 @@ function GeoBriefDebugBox({ debug }: { debug: GeoAiDailyBriefDebug | null }) {
     ["Latest alert timestamp", debug.latestGoogleAlertTimestamp || "None"],
     ["Article links extracted", String(debug.articleLinksExtracted)],
     ["Article links fetched", String(debug.articleLinksFetched)],
+    ["AI provider", debug.aiProviderUsed || "Unknown"],
+    ["Model", debug.aiModelUsed || "Unknown"],
+    ["Fallback used", debug.fallbackBriefUsed ? "Yes" : "No"],
   ];
 
   return (
-    <div className={`${dt.cardRadius} ${dt.border} bg-slate-950/45 p-4`}>
-      <p className={`text-sm font-semibold ${dt.textPrimary}`}>Gmail debug</p>
-      <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
-        {rows.map(([label, value]) => (
-          <div key={label} className="min-w-0 rounded-md border border-slate-800/70 bg-slate-950/35 p-3">
-            <dt className="font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
-            <dd className="mt-1 break-words text-slate-200">{value}</dd>
+    <details className={`${dt.cardRadius} ${dt.border} bg-slate-950/45`}>
+      <summary className="cursor-pointer list-none p-4">
+        <p className={`text-sm font-semibold ${dt.textPrimary}`}>Technical debug</p>
+        <p className={`mt-1 text-xs ${dt.muted}`}>Gmail, fetch, AI provider, and fallback diagnostics.</p>
+      </summary>
+      <div className="px-4 pb-4">
+        <dl className="grid gap-2 text-xs sm:grid-cols-2">
+          {rows.map(([label, value]) => (
+            <div key={label} className="min-w-0 rounded-md border border-slate-800/70 bg-slate-950/35 p-3">
+              <dt className="font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+              <dd className="mt-1 break-words text-slate-200">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {debug.fetchErrors.length > 0 ? (
+          <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-950/20 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-100/80">
+              Fetch errors / blocked pages
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-amber-100/80">
+              {debug.fetchErrors.slice(0, 6).map((error, idx) => (
+                <li key={`geo-debug-error-${idx}-${error.slice(0, 16)}`}>{capDisplayText(error, 220)}</li>
+              ))}
+            </ul>
           </div>
-        ))}
-      </dl>
-      {debug.fetchErrors.length > 0 ? (
-        <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-950/20 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-amber-100/80">
-            Fetch errors / blocked pages
-          </p>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-amber-100/80">
-            {debug.fetchErrors.slice(0, 6).map((error, idx) => (
-              <li key={`geo-debug-error-${idx}-${error.slice(0, 16)}`}>{error}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      {debug.error ? (
-        <p className="mt-3 text-xs leading-relaxed text-amber-100/85">{debug.error}</p>
-      ) : null}
-    </div>
+        ) : null}
+        {debug.error ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-100/85">{capDisplayText(debug.error, 500)}</p>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -1203,7 +1244,52 @@ export default function Home() {
                         Executive signal
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {geoBrief.executiveSignal || geoBrief.executiveSummary}
+                        {capDisplayText(geoBrief.executiveSignal || geoBrief.executiveSummary, 1200)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        What happened today
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {capDisplayText(geoBrief.whatHappenedToday || geoBrief.marketMovement)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Why it matters for Semrush / Adobe
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {capDisplayText(geoBrief.whyItMattersForSemrushAdobe || geoBrief.semrushAdobeRelevance)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        GTM / Sales implication
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {capDisplayText(geoBrief.gtmSalesImplication || geoBrief.geoAiSearchAdsImplications)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        HRBP implication
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {capDisplayText(geoBrief.hrbpImplication || geoBrief.hrbpOrgHiringRelevance)}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Recommended action
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {capDisplayText(geoBrief.recommendedAction)}
                       </p>
                     </div>
 
@@ -1213,108 +1299,49 @@ export default function Home() {
                           One-line summary
                         </p>
                         <p className="mt-2 text-sm leading-7 text-slate-300">
-                          {geoBrief.oneLineSummary}
+                          {capDisplayText(geoBrief.oneLineSummary, 320)}
                         </p>
                       </div>
                     ) : null}
-
-                    {geoBrief.topSignals.length > 0 ? (
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Top signals
-                        </p>
-                        <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
-                          {geoBrief.topSignals.map((item, idx) => (
-                            <li key={`geo-signal-${idx}-${item.slice(0, 24)}`}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        What happened today
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {geoBrief.whatHappenedToday || geoBrief.marketMovement}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        GTM / Sales implication
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {geoBrief.gtmSalesImplication || geoBrief.geoAiSearchAdsImplications}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Why it matters for Semrush / Adobe
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {geoBrief.whyItMattersForSemrushAdobe || geoBrief.semrushAdobeRelevance}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        HRBP implication
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {geoBrief.hrbpImplication || geoBrief.hrbpOrgHiringRelevance}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                        Recommended action
-                      </p>
-                      <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {geoBrief.recommendedAction}
-                      </p>
-                    </div>
 
                     {geoBrief.warnings.length > 0 ? (
                       <div>
                         <ul className="space-y-2 rounded-lg border border-amber-400/20 bg-amber-950/20 p-4 text-sm leading-relaxed text-amber-100/85">
                           {geoBrief.warnings.map((item, idx) => (
-                            <li key={`geo-warning-${idx}-${item.slice(0, 24)}`}>{item}</li>
+                            <li key={`geo-warning-${idx}-${item.slice(0, 24)}`}>{capDisplayText(item, 240)}</li>
                           ))}
                         </ul>
                       </div>
                     ) : null}
 
-                    {geoBrief.sourceLinks.length > 0 ? (
+                    {compactBriefSources(geoBrief).length > 0 ? (
                       <div>
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Source links
+                          Sources
                         </p>
                         <ul className="mt-3 space-y-3">
-                          {geoBrief.sourceLinks.map((source, idx) => (
+                          {compactBriefSources(geoBrief).map((source, idx) => (
                             <li
                               key={`geo-source-${idx}-${source.url}`}
-                              className="rounded-lg border border-slate-800/80 bg-slate-950/35 p-4"
+                              className="grid gap-2 rounded-lg border border-slate-800/80 bg-slate-950/35 p-4 sm:grid-cols-[1.5rem_minmax(0,1fr)_auto] sm:items-start"
                             >
+                              <span className={`text-sm font-semibold ${dt.muted}`}>{idx + 1}.</span>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold leading-relaxed text-cyan-100">
+                                  {source.title}
+                                </p>
+                                <p className={`mt-1 text-xs ${dt.muted}`}>
+                                  Source: {source.publisher || source.domain} · {source.fetchStatus}
+                                </p>
+                              </div>
                               <a
                                 href={source.url}
                                 target="_blank"
                                 rel="noreferrer"
-                                className="text-sm font-semibold text-cyan-100 hover:text-cyan-200"
+                                className="text-sm font-semibold text-cyan-200 underline-offset-2 hover:text-cyan-100 hover:underline"
                               >
-                                {source.title}
+                                View original article
                               </a>
-                              <p className={`mt-1 text-xs ${dt.muted}`}>
-                                {source.publication} ·{" "}
-                                {source.contentFetched ? "article fetched" : "content unavailable"}
-                              </p>
-                              <p className="mt-2 text-sm leading-relaxed text-slate-300">
-                                {source.shortSummary}
-                              </p>
-                              <p className="mt-2 text-xs leading-relaxed text-emerald-100/75">
-                                {source.relevanceReason}
-                              </p>
                             </li>
                           ))}
                         </ul>
