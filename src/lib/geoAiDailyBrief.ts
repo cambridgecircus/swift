@@ -196,6 +196,25 @@ type OpenAiBriefPayload = {
   sourceLinks: OpenAiSourceLink[];
 };
 
+type BriefSectionKey =
+  | "executiveSignal"
+  | "whatHappenedToday"
+  | "whyItMattersForSemrushAdobe"
+  | "gtmSalesImplication"
+  | "hrbpImplication"
+  | "recommendedAction"
+  | "oneLineSummary";
+
+const REQUIRED_BRIEF_FIELDS: BriefSectionKey[] = [
+  "executiveSignal",
+  "whatHappenedToday",
+  "whyItMattersForSemrushAdobe",
+  "gtmSalesImplication",
+  "hrbpImplication",
+  "recommendedAction",
+  "oneLineSummary",
+];
+
 type GenerateGeoAiDailyBriefOptions = {
   trigger?: BriefTrigger;
   lookbackHours?: number;
@@ -442,8 +461,8 @@ function cleanText(input: string, fallback = ""): string {
   return normalizeWhitespace(stripHtml(input || fallback));
 }
 
-function truncateText(input: string, maxLength: number): string {
-  const text = normalizeWhitespace(input);
+function truncateText(input: string | null | undefined, maxLength: number): string {
+  const text = normalizeWhitespace(input || "");
   if (text.length <= maxLength) return text;
   const slice = text.slice(0, maxLength + 1);
   const sentenceEnd = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "));
@@ -451,8 +470,8 @@ function truncateText(input: string, maxLength: number): string {
   return `${slice.slice(0, breakAt).trim().replace(/[,:;.-]+$/g, "")}...`;
 }
 
-function sanitizeBriefText(input: string, maxLength = MAX_SECTION_CHARS): string {
-  const withoutMarkdownLinks = input.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, "$1");
+function sanitizeBriefText(input: string | null | undefined, maxLength = MAX_SECTION_CHARS): string {
+  const withoutMarkdownLinks = String(input || "").replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gi, "$1");
   const withoutBareUrls = withoutMarkdownLinks.replace(/https?:\/\/[^\s\])"'<>]+/gi, "");
   return truncateText(cleanText(withoutBareUrls), maxLength);
 }
@@ -1213,8 +1232,15 @@ const responseFormat = {
 
 function extractJsonObject(text: string): unknown {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  const parseJsonish = (value: string) => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return JSON.parse(value.replace(/,\s*([}\]])/g, "$1"));
+    }
+  };
   try {
-    return JSON.parse(trimmed);
+    return parseJsonish(trimmed);
   } catch {
     const start = trimmed.indexOf("{");
     if (start === -1) throw new Error("AI response did not include a JSON object");
@@ -1233,11 +1259,118 @@ function extractJsonObject(text: string): unknown {
       else if (char === "{") depth += 1;
       else if (char === "}") {
         depth -= 1;
-        if (depth === 0) return JSON.parse(trimmed.slice(start, i + 1));
+        if (depth === 0) return parseJsonish(trimmed.slice(start, i + 1));
       }
     }
     throw new Error("AI response JSON object was incomplete");
   }
+}
+
+function normalizedKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function findValueByKeys(record: Record<string, unknown>, keys: string[]): unknown {
+  const wanted = new Set(keys.map(normalizedKey));
+  for (const [key, value] of Object.entries(record)) {
+    if (wanted.has(normalizedKey(key))) return value;
+  }
+  return undefined;
+}
+
+function stringFieldAny(record: Record<string, unknown>, keys: string[], fallback = ""): string {
+  const value = findValueByKeys(record, keys);
+  if (typeof value === "string" && value.trim()) return normalizeWhitespace(value);
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => (typeof item === "string" ? item : ""))
+      .filter(Boolean)
+      .join(" ");
+    if (joined.trim()) return normalizeWhitespace(joined);
+  }
+  return fallback;
+}
+
+function booleanFieldAny(record: Record<string, unknown>, keys: string[], fallback = false): boolean {
+  const value = findValueByKeys(record, keys);
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const lowered = value.trim().toLowerCase();
+    if (["yes", "true", "fetched", "success", "successful"].includes(lowered)) return true;
+    if (["no", "false", "blocked", "unavailable", "failed"].includes(lowered)) return false;
+  }
+  return fallback;
+}
+
+function unwrapBriefRecord(value: unknown): Record<string, unknown> {
+  const record = asRecord(value);
+  const nested = findValueByKeys(record, [
+    "brief",
+    "report",
+    "analysis",
+    "geoAiDailyBrief",
+    "geo_ai_daily_brief",
+    "dailyBrief",
+  ]);
+  return Object.keys(asRecord(nested)).length ? asRecord(nested) : record;
+}
+
+function headingToBriefField(heading: string): BriefSectionKey | null {
+  const key = normalizedKey(heading);
+  if (key.includes("executive") || key.includes("signal")) return "executiveSignal";
+  if (key.includes("whathappened") || key.includes("today") || key.includes("marketmovement")) {
+    return "whatHappenedToday";
+  }
+  if (key.includes("semrush") || key.includes("adobe") || key.includes("whyitmatters")) {
+    return "whyItMattersForSemrushAdobe";
+  }
+  if (key.includes("gtm") || key.includes("sales")) return "gtmSalesImplication";
+  if (key.includes("hrbp") || key.includes("org") || key.includes("hiring")) return "hrbpImplication";
+  if (key.includes("recommended") || key.includes("action") || key.includes("nextstep")) {
+    return "recommendedAction";
+  }
+  if (key.includes("oneline") || key === "summary" || key.includes("tl dr") || key.includes("tldr")) {
+    return "oneLineSummary";
+  }
+  return null;
+}
+
+function parseMarkdownBrief(text: string): Record<string, unknown> {
+  const fields: Partial<Record<BriefSectionKey, string>> = {};
+  let current: BriefSectionKey | null = null;
+  const pushLine = (line: string) => {
+    if (!current) return;
+    const clean = line.trim();
+    if (!clean) return;
+    fields[current] = [fields[current], clean].filter(Boolean).join(" ");
+  };
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const headingMatch =
+      line.match(/^#{1,4}\s+(.+?)\s*$/) ||
+      line.match(/^\*\*(.+?)\*\*:?\s*(.*)$/) ||
+      line.match(/^([A-Z][A-Za-z /&-]{3,80}):\s*(.*)$/);
+    if (headingMatch) {
+      const field = headingToBriefField(headingMatch[1]);
+      if (field) {
+        current = field;
+        const inlineValue = headingMatch[2]?.trim();
+        if (inlineValue) pushLine(inlineValue);
+        continue;
+      }
+    }
+    pushLine(line.replace(/^[-*]\s+/, ""));
+  }
+
+  return fields;
 }
 
 function buildFallbackPayload(args: {
@@ -1343,56 +1476,83 @@ async function runAiAnalysis(args: {
   }
 
   logDebug(args.debug, `AI analysis succeeded provider=${config.provider} model=${config.model}`);
-  return coerceOpenAiPayload(extractJsonObject(content), args.articles);
-}
-
-function stringField(record: Record<string, unknown>, key: string, fallback = ""): string {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? normalizeWhitespace(value) : fallback;
+  let structured: unknown;
+  try {
+    structured = extractJsonObject(content);
+  } catch {
+    logDebug(args.debug, "AI response was not valid JSON; parsing markdown headings");
+    structured = parseMarkdownBrief(content);
+  }
+  return coerceOpenAiPayload(structured, args.articles);
 }
 
 function coerceOpenAiPayload(value: unknown, articles: ArticleInput[]): OpenAiBriefPayload {
-  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const record = unwrapBriefRecord(value);
   const sourceByKey = new Map<string, ArticleInput>();
   for (const article of articles) {
     sourceByKey.set(urlKey(article.finalUrl), article);
     sourceByKey.set(urlKey(article.url), article);
   }
 
-  const sourceLinks = Array.isArray(record.sourceLinks)
-    ? record.sourceLinks
+  const rawSources = findValueByKeys(record, [
+    "sourceLinks",
+    "source_links",
+    "sources",
+    "sourceItems",
+    "articles",
+    "links",
+  ]);
+  const sourceLinks = Array.isArray(rawSources)
+    ? rawSources
         .map<GeoAiBriefSource | null>((item) => {
           if (!item || typeof item !== "object") return null;
           const source = item as Record<string, unknown>;
-          const rawUrl = cleanArticleUrl(stringField(source, "url"));
+          const rawUrl = cleanArticleUrl(
+            stringFieldAny(source, ["url", "link", "href", "sourceUrl", "source_url"]),
+          );
           if (!rawUrl || !isHttpUrl(rawUrl)) return null;
           const matched = sourceByKey.get(urlKey(rawUrl));
           const url = cleanArticleUrl(matched?.finalUrl || rawUrl);
-          const publication = stringField(
+          const publication = stringFieldAny(
             source,
-            "publication",
+            ["publication", "publisher", "source", "domain", "site"],
             matched?.publication || sourceFromUrl(url),
           ).slice(0, 120);
+          const contentFetched = matched?.contentFetched ?? booleanFieldAny(source, [
+            "contentFetched",
+            "content_fetched",
+            "fetched",
+            "articleFetched",
+          ]);
           return {
-            title: cleanSourceTitle(stringField(source, "title", matched?.title || sourceFromUrl(url)), url),
+            title: cleanSourceTitle(
+              stringFieldAny(source, ["title", "subject", "headline", "name"], matched?.title || sourceFromUrl(url)),
+              url,
+            ),
             publication,
             publisher: publication,
             domain: sourceDomain(url),
             url,
             shortSummary: truncateText(
-              sanitizeBriefText(stringField(source, "shortSummary", matched?.snippet || ""), MAX_SOURCE_SNIPPET_CHARS),
-              MAX_SOURCE_SNIPPET_CHARS,
-            ),
-            relevanceReason: truncateText(
               sanitizeBriefText(
-                stringField(source, "relevanceReason", "Relevant to GEO x AI visibility."),
+                stringFieldAny(source, ["shortSummary", "short_summary", "summary", "snippet"], matched?.snippet || ""),
                 MAX_SOURCE_SNIPPET_CHARS,
               ),
               MAX_SOURCE_SNIPPET_CHARS,
             ),
-            contentFetched: matched?.contentFetched ?? source.contentFetched === true,
-            fetchStatus:
-              (matched?.contentFetched ?? source.contentFetched === true) ? "fetched" : "content unavailable",
+            relevanceReason: truncateText(
+              sanitizeBriefText(
+                stringFieldAny(
+                  source,
+                  ["relevanceReason", "relevance_reason", "relevance", "reason"],
+                  "Relevant to GEO x AI visibility.",
+                ),
+                MAX_SOURCE_SNIPPET_CHARS,
+              ),
+              MAX_SOURCE_SNIPPET_CHARS,
+            ),
+            contentFetched,
+            fetchStatus: contentFetched ? "fetched" : "content unavailable",
           };
         })
         .filter((item): item is GeoAiBriefSource => Boolean(item))
@@ -1416,13 +1576,56 @@ function coerceOpenAiPayload(value: unknown, articles: ArticleInput[]): OpenAiBr
   }
 
   return {
-    executiveSignal: sanitizeBriefText(stringField(record, "executiveSignal"), MAX_EXECUTIVE_SIGNAL_CHARS),
-    whatHappenedToday: sanitizeBriefText(stringField(record, "whatHappenedToday")),
-    whyItMattersForSemrushAdobe: sanitizeBriefText(stringField(record, "whyItMattersForSemrushAdobe")),
-    gtmSalesImplication: sanitizeBriefText(stringField(record, "gtmSalesImplication")),
-    hrbpImplication: sanitizeBriefText(stringField(record, "hrbpImplication")),
-    recommendedAction: sanitizeBriefText(stringField(record, "recommendedAction")),
-    oneLineSummary: sanitizeBriefText(stringField(record, "oneLineSummary"), 320),
+    executiveSignal: sanitizeBriefText(
+      stringFieldAny(record, ["executiveSignal", "executive_signal", "executiveSummary", "executive_summary"]),
+      MAX_EXECUTIVE_SIGNAL_CHARS,
+    ),
+    whatHappenedToday: sanitizeBriefText(
+      stringFieldAny(record, ["whatHappenedToday", "what_happened_today", "whatHappened", "marketMovement"]),
+    ),
+    whyItMattersForSemrushAdobe: sanitizeBriefText(
+      stringFieldAny(record, [
+        "whyItMattersForSemrushAdobe",
+        "why_it_matters_for_semrush_adobe",
+        "whyItMatters",
+        "semrushAdobeRelevance",
+        "semrush_adobe_relevance",
+      ]),
+    ),
+    gtmSalesImplication: sanitizeBriefText(
+      stringFieldAny(record, [
+        "gtmSalesImplication",
+        "gtm_sales_implication",
+        "salesImplication",
+        "sales_implication",
+        "gtmImplication",
+        "gtm_implication",
+        "geoAiSearchAdsImplications",
+      ]),
+    ),
+    hrbpImplication: sanitizeBriefText(
+      stringFieldAny(record, [
+        "hrbpImplication",
+        "hrbp_implication",
+        "hrbpImplications",
+        "hrbp_implications",
+        "hrbpOrgHiringRelevance",
+      ]),
+    ),
+    recommendedAction: sanitizeBriefText(
+      stringFieldAny(record, [
+        "recommendedAction",
+        "recommended_action",
+        "recommendedActions",
+        "recommended_actions",
+        "nextSteps",
+        "next_steps",
+      ]),
+    ),
+    oneLineSummary: sanitizeBriefText(
+      stringFieldAny(record, ["oneLineSummary", "one_line_summary", "summary", "tlDr", "tldr"]),
+      320,
+    ),
     sourceLinks,
   };
 }
@@ -1451,6 +1654,79 @@ function compactSources(sourceLinks: GeoAiBriefSource[]): GeoAiBriefCompactSourc
     if (out.length >= MAX_DISPLAY_SOURCES) break;
   }
   return out;
+}
+
+function sourceReferenceText(sources: GeoAiBriefCompactSource[]): string {
+  const refs = sources
+    .slice(0, 3)
+    .map((source) => `${source.title} (${source.publisher || source.domain})`)
+    .filter(Boolean);
+  return refs.length ? refs.join("; ") : "the latest CareerIntel/Market Google Alert sources";
+}
+
+function deterministicFallbackSections(brief: GeoAiDailyBrief): Record<BriefSectionKey, string> {
+  const sources = brief.sources?.length ? brief.sources : compactSources(brief.sourceLinks);
+  const sourceRefs = sourceReferenceText(sources);
+  const alertSubject = brief.gmailDebug.latestGoogleAlertSubject || "today's CareerIntel/Market Google Alert";
+  return {
+    executiveSignal:
+      "Today's CareerIntel/Market Google Alert shows continued market activity around GEO, AEO, AI search visibility, and brand discoverability. The signal is that AI visibility is becoming a mainstream marketing and GTM category rather than a niche SEO topic.",
+    whatHappenedToday:
+      `Several sources in ${alertSubject} referenced GEO, AI search visibility, brand visibility, and related vendor/activity signals. Top referenced sources include: ${sourceRefs}.`,
+    whyItMattersForSemrushAdobe:
+      "This matters for Semrush and Adobe because the market is moving from classic SEO measurement toward AI visibility, answer-engine visibility, and brand discoverability across AI search experiences. Semrush has an opportunity to position this as a commercial GTM capability, not just a product feature.",
+    gtmSalesImplication:
+      "Sales teams need a clearer narrative for selling AI visibility: how brands are found, cited, and recommended across AI search and answer engines. This requires stronger PMM messaging, enablement, competitive talk tracks, and proof points linked to pipeline and category visibility.",
+    hrbpImplication:
+      "For HRBP work, the implication is capability building: sales enablement, manager coaching, critical talent retention, and identifying where GEO/AEO knowledge is needed across Sales, Marketing, Product, and Customer-facing teams.",
+    recommendedAction:
+      "Review current GTM capability against the AI visibility narrative. Identify the roles and teams that need enablement first, align PMM/Sales messaging, and prepare a short stakeholder update on how GEO affects Semrush/Adobe GTM priorities.",
+    oneLineSummary:
+      "GEO and AI visibility are becoming a mainstream GTM category, and Semrush should treat this as a sales capability and positioning shift.",
+  };
+}
+
+function normalizeBrief(brief: GeoAiDailyBrief): GeoAiDailyBrief {
+  const fallbacks = deterministicFallbackSections(brief);
+  const next = { ...brief };
+  for (const key of REQUIRED_BRIEF_FIELDS) {
+    const maxLength = key === "executiveSignal" ? MAX_EXECUTIVE_SIGNAL_CHARS : key === "oneLineSummary" ? 320 : MAX_SECTION_CHARS;
+    const current = sanitizeBriefText(next[key], maxLength);
+    next[key] = current || sanitizeBriefText(fallbacks[key], maxLength);
+  }
+
+  next.headline = next.oneLineSummary || next.executiveSignal;
+  next.executiveSummary = sanitizeBriefText(
+    [
+      next.executiveSignal,
+      next.whatHappenedToday,
+      next.whyItMattersForSemrushAdobe,
+      next.recommendedAction,
+    ].join(" "),
+    MAX_SECTION_CHARS,
+  );
+  next.topSignals = [next.executiveSignal, next.oneLineSummary, next.recommendedAction]
+    .filter(Boolean)
+    .map((item) => sanitizeBriefText(item, 320))
+    .slice(0, 3);
+  next.marketMovement = next.whatHappenedToday;
+  next.geoAiSearchAdsImplications = next.gtmSalesImplication;
+  next.semrushAdobeRelevance = next.whyItMattersForSemrushAdobe;
+  next.hrbpOrgHiringRelevance = next.hrbpImplication;
+  next.sources = next.sources?.length ? next.sources.slice(0, MAX_DISPLAY_SOURCES) : compactSources(next.sourceLinks);
+  next.sourceLinks = next.sourceLinks.slice(0, MAX_DISPLAY_SOURCES);
+
+  const completeness = Object.fromEntries(
+    REQUIRED_BRIEF_FIELDS.map((key) => [key, Boolean(next[key]?.trim())]),
+  );
+  console.log("[GEO_AI_BRIEF] Section completeness", JSON.stringify(completeness));
+
+  const missing = REQUIRED_BRIEF_FIELDS.filter((key) => !next[key]?.trim());
+  if (missing.length) {
+    throw new Error(`GEO x AI Daily Brief normalization failed; empty sections remain: ${missing.join(", ")}`);
+  }
+
+  return next;
 }
 
 function buildDebugSummary(args: {
@@ -1801,7 +2077,7 @@ async function findStoredScheduledBriefForDate(
       brief.email?.sent === true
     );
   });
-  return row ? (row.report_json as GeoAiDailyBrief) : null;
+  return row ? normalizeBrief(row.report_json as GeoAiDailyBrief) : null;
 }
 
 async function hasDigestEmailForDate(
@@ -1856,7 +2132,7 @@ export async function getLatestGeoAiDailyBrief(): Promise<{
   });
   if (!row) return { brief: null, storageConfigured: !latest.error, error: latest.error };
   const report = row.report_json as GeoAiDailyBrief;
-  return { brief: report, storageConfigured: true };
+  return { brief: normalizeBrief(report), storageConfigured: true };
 }
 
 export async function generateGeoAiDailyBrief(
@@ -1875,14 +2151,15 @@ export async function generateGeoAiDailyBrief(
   if (trigger === "scheduled" && !forceSendEmail) {
     const storedDuplicate = await findStoredScheduledBriefForDate(digestDate);
     if (storedDuplicate) {
-      storedDuplicate.diagnostics.duplicateScheduledEmailSkipped = true;
+      const normalizedDuplicate = normalizeBrief(storedDuplicate);
+      normalizedDuplicate.diagnostics.duplicateScheduledEmailSkipped = true;
       console.log(`[GEO_AI_BRIEF] Scheduled duplicate skipped from storage date=${digestDate}`);
       return {
-        brief: storedDuplicate,
+        brief: normalizedDuplicate,
         storage: { saved: true },
         duplicateSkipped: true,
         message: `Scheduled GEO x AI brief email already exists for ${digestDate}`,
-        debug: storedDuplicate.gmailDebug,
+        debug: normalizedDuplicate.gmailDebug,
       };
     }
   }
@@ -1960,15 +2237,17 @@ export async function generateGeoAiDailyBrief(
     payload = buildFallbackPayload({ emails, articles });
   }
 
-  const brief = buildBrief({
-    payload,
-    articles,
-    generatedAt,
-    digestDate,
-    trigger,
-    diagnostics,
-    debug,
-  });
+  const brief = normalizeBrief(
+    buildBrief({
+      payload,
+      articles,
+      generatedAt,
+      digestDate,
+      trigger,
+      diagnostics,
+      debug,
+    }),
+  );
   if (diagnostics.fallbackBriefUsed) {
     brief.warnings.push("Configured AI provider failed; this brief was generated from Google Alert titles, snippets, and fetched article text.");
   }

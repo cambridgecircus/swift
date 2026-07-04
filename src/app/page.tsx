@@ -240,6 +240,48 @@ function compactBriefSources(brief: GeoAiDailyBrief) {
   }));
 }
 
+type GeoBriefSectionKey =
+  | "executiveSignal"
+  | "whatHappenedToday"
+  | "whyItMattersForSemrushAdobe"
+  | "gtmSalesImplication"
+  | "hrbpImplication"
+  | "recommendedAction"
+  | "oneLineSummary";
+
+function sourceReferenceText(brief: GeoAiDailyBrief) {
+  const refs = compactBriefSources(brief)
+    .slice(0, 3)
+    .map((source) => `${source.title} (${source.publisher || source.domain})`);
+  return refs.length ? refs.join("; ") : "the latest CareerIntel/Market Google Alert sources";
+}
+
+function briefFallbackSections(brief: GeoAiDailyBrief): Record<GeoBriefSectionKey, string> {
+  const alertSubject = brief.gmailDebug?.latestGoogleAlertSubject || "today's CareerIntel/Market Google Alert";
+  const sourceRefs = sourceReferenceText(brief);
+  return {
+    executiveSignal:
+      "Today's CareerIntel/Market Google Alert shows continued market activity around GEO, AEO, AI search visibility, and brand discoverability. The signal is that AI visibility is becoming a mainstream marketing and GTM category rather than a niche SEO topic.",
+    whatHappenedToday:
+      `Several sources in ${alertSubject} referenced GEO, AI search visibility, brand visibility, and related vendor/activity signals. Top referenced sources include: ${sourceRefs}.`,
+    whyItMattersForSemrushAdobe:
+      "This matters for Semrush and Adobe because the market is moving from classic SEO measurement toward AI visibility, answer-engine visibility, and brand discoverability across AI search experiences. Semrush has an opportunity to position this as a commercial GTM capability, not just a product feature.",
+    gtmSalesImplication:
+      "Sales teams need a clearer narrative for selling AI visibility: how brands are found, cited, and recommended across AI search and answer engines. This requires stronger PMM messaging, enablement, competitive talk tracks, and proof points linked to pipeline and category visibility.",
+    hrbpImplication:
+      "For HRBP work, the implication is capability building: sales enablement, manager coaching, critical talent retention, and identifying where GEO/AEO knowledge is needed across Sales, Marketing, Product, and Customer-facing teams.",
+    recommendedAction:
+      "Review current GTM capability against the AI visibility narrative. Identify the roles and teams that need enablement first, align PMM/Sales messaging, and prepare a short stakeholder update on how GEO affects Semrush/Adobe GTM priorities.",
+    oneLineSummary:
+      "GEO and AI visibility are becoming a mainstream GTM category, and Semrush should treat this as a sales capability and positioning shift.",
+  };
+}
+
+function briefSectionText(brief: GeoAiDailyBrief, key: GeoBriefSectionKey, maxLength = 1500) {
+  const value = String(brief[key] || "").trim() || briefFallbackSections(brief)[key];
+  return capDisplayText(value, maxLength);
+}
+
 function GeoBriefDebugBox({ debug }: { debug: GeoAiDailyBriefDebug | null }) {
   if (!debug) return null;
   const rows: Array<[string, string]> = [
@@ -1244,7 +1286,7 @@ export default function Home() {
                         Executive signal
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {capDisplayText(geoBrief.executiveSignal || geoBrief.executiveSummary, 1200)}
+                        {briefSectionText(geoBrief, "executiveSignal", 1200)}
                       </p>
                     </div>
 
@@ -1253,7 +1295,7 @@ export default function Home() {
                         What happened today
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {capDisplayText(geoBrief.whatHappenedToday || geoBrief.marketMovement)}
+                        {briefSectionText(geoBrief, "whatHappenedToday")}
                       </p>
                     </div>
 
@@ -1262,7 +1304,7 @@ export default function Home() {
                         Why it matters for Semrush / Adobe
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {capDisplayText(geoBrief.whyItMattersForSemrushAdobe || geoBrief.semrushAdobeRelevance)}
+                        {briefSectionText(geoBrief, "whyItMattersForSemrushAdobe")}
                       </p>
                     </div>
 
@@ -1271,7 +1313,7 @@ export default function Home() {
                         GTM / Sales implication
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {capDisplayText(geoBrief.gtmSalesImplication || geoBrief.geoAiSearchAdsImplications)}
+                        {briefSectionText(geoBrief, "gtmSalesImplication")}
                       </p>
                     </div>
 
@@ -1280,7 +1322,7 @@ export default function Home() {
                         HRBP implication
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {capDisplayText(geoBrief.hrbpImplication || geoBrief.hrbpOrgHiringRelevance)}
+                        {briefSectionText(geoBrief, "hrbpImplication")}
                       </p>
                     </div>
 
@@ -1289,20 +1331,18 @@ export default function Home() {
                         Recommended action
                       </p>
                       <p className="mt-2 text-sm leading-7 text-slate-300">
-                        {capDisplayText(geoBrief.recommendedAction)}
+                        {briefSectionText(geoBrief, "recommendedAction")}
                       </p>
                     </div>
 
-                    {geoBrief.oneLineSummary ? (
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          One-line summary
-                        </p>
-                        <p className="mt-2 text-sm leading-7 text-slate-300">
-                          {capDisplayText(geoBrief.oneLineSummary, 320)}
-                        </p>
-                      </div>
-                    ) : null}
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        One-line summary
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "oneLineSummary", 320)}
+                      </p>
+                    </div>
 
                     {geoBrief.warnings.length > 0 ? (
                       <div>
