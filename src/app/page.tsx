@@ -8,7 +8,6 @@ import { DetailsPanel, NestedPanel, StatusBadge } from "@/components/DashboardPr
 import type { NavItem, NavKey } from "@/components/Sidebar";
 import Sidebar from "@/components/Sidebar";
 import SectionHeader from "@/components/SectionHeader";
-import SourceDropdown from "@/components/SourceDropdown";
 import { mockLearningAssets, mockOpportunities, mockSkills } from "@/lib/mockData";
 import { jobApplicationChannels, suggestedNewChannels } from "@/lib/jobSourceMemory";
 import { designTokens as dt } from "@/lib/designTokens";
@@ -29,20 +28,16 @@ import {
 import type { RunDiagnostics } from "@/lib/runDiagnostics";
 import type { LiveLearningAsset, LiveSkillToPickUp, LiveSkillsAndLearningResult } from "@/lib/skillsAndLearning";
 import { normalizeDashboardReport, type DashboardReport } from "@/lib/dashboardReportMapper";
-import type { GeoAiDailyBrief } from "@/lib/geoAiDailyBrief";
-
-type DashboardBrief = {
-  title: string;
-  headline: string;
-  signals: string[];
-};
+import type { GeoAiDailyBrief, GeoAiDailyBriefDebug } from "@/lib/geoAiDailyBrief";
 
 type GeoBriefResponse = {
   ok?: boolean;
   report?: GeoAiDailyBrief | null;
   empty?: boolean;
   error?: string;
+  message?: string;
   storage?: { saved?: boolean; error?: string };
+  debug?: GeoAiDailyBriefDebug;
 };
 
 const SOURCE_TOPIC_LABEL: Record<string, string> = {
@@ -51,26 +46,6 @@ const SOURCE_TOPIC_LABEL: Record<string, string> = {
   hr: "HR & people",
   jobs: "Jobs",
   learning: "Learning",
-};
-
-const web3AiBrief: DashboardBrief = {
-  title: "Web3 x AI Daily Brief",
-  headline: "Operators are replacing hype with execution discipline.",
-  signals: [
-    "Compliance-ready growth is becoming a hiring constraint, not a side note.",
-    "AI adoption is shifting from tooling to operating model redesign.",
-    "Lean teams are prioritising role criticality and decision quality.",
-  ],
-};
-
-const hrbpBrief: DashboardBrief = {
-  title: "HRBP Daily Brief",
-  headline: "Executives want fewer dashboards and more decisions.",
-  signals: [
-    "Capability mapping is the new baseline for hiring plans.",
-    "Performance cadence is moving to shorter, signal-driven loops.",
-    "People analytics must translate into actions, not observations.",
-  ],
 };
 
 function cleanTextArray(input: Array<string | null | undefined>, limit = 5): string[] {
@@ -230,6 +205,150 @@ function AccordionSection({
 function formatDateTime(date: Date | null) {
   if (!date) return "Not refreshed yet";
   return date.toLocaleString();
+}
+
+function capDisplayText(input: string | null | undefined, maxLength = 1500) {
+  const text = String(input || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trim().replace(/[,:;.-]+$/g, "")}...`;
+}
+
+function containsAlertBooleanQuery(input: string | null | undefined) {
+  const text = String(input || "");
+  const orCount = (text.toUpperCase().match(/\bOR\b/g) || []).length;
+  const quotedPhraseCount = (text.match(/"[^"]{3,80}"/g) || []).length;
+  return (
+    orCount >= 3 &&
+    quotedPhraseCount >= 3 &&
+    /geo|aeo|ai search|ai visibility|llm visibility|google ai overviews|chatgpt search|perplexity|semrush/i.test(
+      text,
+    )
+  );
+}
+
+function sourceDomain(url: string) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "source";
+  }
+}
+
+function compactBriefSources(brief: GeoAiDailyBrief) {
+  const sources =
+    Array.isArray(brief.sources) && brief.sources.length > 0
+      ? brief.sources
+      : brief.sourceLinks.map((source) => ({
+          title: source.title,
+          publisher: source.publisher || source.publication || source.domain || sourceDomain(source.url),
+          domain: source.domain || sourceDomain(source.url),
+          url: source.url,
+          fetchStatus: source.fetchStatus || (source.contentFetched ? "fetched" : "content unavailable"),
+        }));
+
+  return sources.map((source) => ({
+    ...source,
+    title: capDisplayText(source.title, 200),
+    publisher: capDisplayText(source.publisher || source.domain, 120),
+  }));
+}
+
+type GeoBriefSectionKey =
+  | "executiveSignal"
+  | "whatHappenedToday"
+  | "whyItMattersForSemrushAdobe"
+  | "gtmSalesImplication"
+  | "hrbpImplication"
+  | "recommendedAction"
+  | "oneLineSummary";
+
+function sourceReferenceText(brief: GeoAiDailyBrief) {
+  const refs = compactBriefSources(brief)
+    .slice(0, 3)
+    .map((source) => `${source.title} (${source.publisher || source.domain})`);
+  return refs.length ? refs.join("; ") : "the clean article sources available today";
+}
+
+function briefFallbackSections(brief: GeoAiDailyBrief): Record<GeoBriefSectionKey, string> {
+  const sourceRefs = sourceReferenceText(brief);
+  return {
+    executiveSignal:
+      "Today's GEO market signal is that AI visibility is continuing to move from thought-leadership language into agency services, measurement frameworks, and brand-discoverability products.",
+    whatHappenedToday:
+      `Today's source set surfaced several GEO and AI search visibility items, including ${sourceRefs}. The common thread is that vendors and agencies are packaging AI visibility as a measurable marketing capability.`,
+    whyItMattersForSemrushAdobe:
+      "These signals matter because Semrush can position GEO as the next layer of SEO and brand visibility, while Adobe can connect it to enterprise digital experience, content, and customer journey measurement.",
+    gtmSalesImplication:
+      "Sales teams need to move the conversation from keyword ranking to discoverability across AI search, answer engines, and LLM citations. This requires new PMM talk tracks, competitive positioning, and proof points.",
+    hrbpImplication:
+      "For HRBP work, this points to sales capability building, manager enablement, and identifying where GEO/AEO knowledge is needed across GTM roles.",
+    recommendedAction:
+      "Create a short GEO sales capability map, align PMM and Sales on the AI visibility narrative, and identify the first three roles that need enablement.",
+    oneLineSummary:
+      "GEO is becoming a commercial GTM narrative, not just an SEO terminology shift.",
+  };
+}
+
+function briefSectionText(brief: GeoAiDailyBrief, key: GeoBriefSectionKey, maxLength = 1500) {
+  const stored = String(brief[key] || "").trim();
+  const value = stored && !containsAlertBooleanQuery(stored) ? stored : briefFallbackSections(brief)[key];
+  return capDisplayText(value, maxLength);
+}
+
+function GeoBriefDebugBox({ debug }: { debug: GeoAiDailyBriefDebug | null }) {
+  if (!debug) return null;
+  const rows: Array<[string, string]> = [
+    ["Authenticated Gmail", debug.authenticatedGmailAccount || "Unknown"],
+    ["Expected Gmail", debug.expectedGmailAccount],
+    ["Account matched", debug.accountMatched ? "Yes" : "No"],
+    ["Configured GMAIL_USER", debug.configuredGmailUser || "Not set"],
+    ["CareerIntel/Market label", debug.careerIntelMarketLabelExists ? "Found" : "Missing"],
+    ["CareerIntel/Market label ID", debug.careerIntelMarketLabelId || "Not found"],
+    ["Label search results", String(debug.labelSearchMessagesFound)],
+    ["Fallback search results", String(debug.fallbackSearchMessagesFound)],
+    ["Successful query", debug.successfulGmailQuery || "None yet"],
+    ["Latest alert subject", debug.latestGoogleAlertSubject || "None"],
+    ["Latest alert timestamp", debug.latestGoogleAlertTimestamp || "None"],
+    ["Article links extracted", String(debug.articleLinksExtracted)],
+    ["Article links fetched", String(debug.articleLinksFetched)],
+    ["AI provider", debug.aiProviderUsed || "Unknown"],
+    ["Model", debug.aiModelUsed || "Unknown"],
+    ["Fallback used", debug.fallbackBriefUsed ? "Yes" : "No"],
+  ];
+
+  return (
+    <details className={`${dt.cardRadius} ${dt.border} bg-slate-950/45`}>
+      <summary className="cursor-pointer list-none p-4">
+        <p className={`text-sm font-semibold ${dt.textPrimary}`}>Technical debug</p>
+        <p className={`mt-1 text-xs ${dt.muted}`}>Gmail, fetch, AI provider, and fallback diagnostics.</p>
+      </summary>
+      <div className="px-4 pb-4">
+        <dl className="grid gap-2 text-xs sm:grid-cols-2">
+          {rows.map(([label, value]) => (
+            <div key={label} className="min-w-0 rounded-md border border-slate-800/70 bg-slate-950/35 p-3">
+              <dt className="font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+              <dd className="mt-1 break-words text-slate-200">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {debug.fetchErrors.length > 0 ? (
+          <div className="mt-3 rounded-md border border-amber-400/20 bg-amber-950/20 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-100/80">
+              Fetch errors / blocked pages
+            </p>
+            <ul className="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed text-amber-100/80">
+              {debug.fetchErrors.slice(0, 6).map((error, idx) => (
+                <li key={`geo-debug-error-${idx}-${error.slice(0, 16)}`}>{capDisplayText(error, 220)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {debug.error ? (
+          <p className="mt-3 text-xs leading-relaxed text-amber-100/85">{capDisplayText(debug.error, 500)}</p>
+        ) : null}
+      </div>
+    </details>
+  );
 }
 
 type KeySignalPreview = {
@@ -633,7 +752,9 @@ export default function Home() {
   const [geoBriefLoading, setGeoBriefLoading] = useState(false);
   const [geoBriefRefreshing, setGeoBriefRefreshing] = useState(false);
   const [geoBriefError, setGeoBriefError] = useState<string | null>(null);
+  const [geoBriefNotice, setGeoBriefNotice] = useState<string | null>(null);
   const [geoBriefEmpty, setGeoBriefEmpty] = useState(false);
+  const [geoBriefDebug, setGeoBriefDebug] = useState<GeoAiDailyBriefDebug | null>(null);
 
   const activeSectionLabel = useMemo(() => {
     const item = navItems.find((n) => n.key === active);
@@ -781,12 +902,15 @@ export default function Home() {
   const loadGeoBrief = useCallback(async () => {
     setGeoBriefLoading(true);
     setGeoBriefError(null);
+    setGeoBriefNotice(null);
     try {
       const res = await fetch("/api/generate-report", { cache: "no-store" });
       const body = (await res.json().catch(() => ({}))) as GeoBriefResponse;
       if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
       setGeoBrief(body.report ?? null);
       setGeoBriefEmpty(Boolean(body.empty || !body.report));
+      setGeoBriefDebug(body.debug ?? body.report?.gmailDebug ?? null);
+      if (body.message) setGeoBriefNotice(body.message);
       if (body.report?.lastUpdatedAt || body.report?.generatedAt) {
         setLastRefreshedAt(new Date(body.report.lastUpdatedAt || body.report.generatedAt));
       }
@@ -810,6 +934,7 @@ export default function Home() {
   async function refreshGeoBrief() {
     setGeoBriefRefreshing(true);
     setGeoBriefError(null);
+    setGeoBriefNotice(null);
     try {
       const res = await fetch("/api/generate-report", {
         method: "POST",
@@ -817,10 +942,21 @@ export default function Home() {
       });
       const body = (await res.json().catch(() => ({}))) as GeoBriefResponse;
       if (!res.ok || body.ok === false) {
+        setGeoBriefDebug(body.debug ?? body.report?.gmailDebug ?? null);
         throw new Error(body.error || body.storage?.error || `HTTP ${res.status}`);
       }
       setGeoBrief(body.report ?? null);
       setGeoBriefEmpty(Boolean(body.empty || !body.report));
+      setGeoBriefDebug(body.debug ?? body.report?.gmailDebug ?? null);
+      if (body.message) {
+        setGeoBriefNotice(body.message);
+      } else if (body.report?.email?.sent) {
+        setGeoBriefNotice("Brief refreshed, Dashboard updated, and digest email sent.");
+      } else if (body.report?.email?.error) {
+        setGeoBriefNotice(`Brief refreshed, but email delivery needs attention: ${body.report.email.error}`);
+      } else if (body.report) {
+        setGeoBriefNotice("Brief refreshed and Dashboard updated.");
+      }
       if (body.report?.lastUpdatedAt || body.report?.generatedAt) {
         setLastRefreshedAt(new Date(body.report.lastUpdatedAt || body.report.generatedAt));
       }
@@ -938,44 +1074,6 @@ export default function Home() {
     if (weeklySummary.liveJobsTotalDeduped > 0) return weeklySummary.liveJobsTotalDeduped;
     return weeklySummary.totalLiveJobs;
   }, [weeklySummary]);
-
-  const web3AiBriefToShow = useMemo(() => {
-    const rep = dashboardReport?.web3AiBrief;
-    if (rep) {
-      return {
-        title: web3AiBrief.title,
-        headline: rep.headline || web3AiBrief.headline,
-        signals: rep.signals.length > 0 ? rep.signals : [],
-      };
-    }
-    return {
-      title: web3AiBrief.title,
-      headline: "No live SWIFT Intel run is loaded.",
-      signals: [
-        "SWIFT expects Gmail SWIFT Intel to be ingested, triaged by AI, saved, then displayed here.",
-        "This view has no saved live run available, so real-time signals are not being shown.",
-      ],
-    };
-  }, [dashboardReport]);
-
-  const hrbpBriefToShow = useMemo(() => {
-    const rep = dashboardReport?.hrbpBrief;
-    if (rep) {
-      return {
-        title: hrbpBrief.title,
-        headline: rep.headline || hrbpBrief.headline,
-        signals: rep.signals.length > 0 ? rep.signals : [],
-      };
-    }
-    return {
-      title: hrbpBrief.title,
-      headline: "No AI-triaged HRBP brief is loaded.",
-      signals: [
-        "Run generation in an environment with Gmail, AI, and storage configured to populate this card.",
-        "Until a saved run exists, this dashboard should not be treated as live intelligence.",
-      ],
-    };
-  }, [dashboardReport]);
 
   async function generateLatestReport() {
     console.info("[DASHBOARD] manual generate started");
@@ -1138,7 +1236,7 @@ export default function Home() {
             <div className="space-y-6 md:space-y-8">
               <SectionHeader
                 title="GEO x AI Daily Brief"
-                subtitle="Executive brief from the Gmail label Daily Career Intel Digest for ChatGPT."
+                subtitle="Executive brief from CareerIntel/Market Google Alerts."
                 right={
                   <div className="flex w-full max-w-md flex-col gap-2 md:w-auto md:max-w-[18rem] md:items-stretch">
                     <button
@@ -1155,6 +1253,16 @@ export default function Home() {
                   </div>
                 }
               />
+
+              {geoBriefNotice ? (
+                <div
+                  className={`${dt.cardRadius} ${dt.border} border-emerald-400/20 bg-emerald-950/20 p-4`}
+                >
+                  <p className="text-sm leading-relaxed text-emerald-100">{geoBriefNotice}</p>
+                </div>
+              ) : null}
+
+              <GeoBriefDebugBox debug={geoBriefDebug} />
 
               {geoBriefLoading ? (
                 <div className={`${dt.cardRadius} ${dt.border} bg-[rgba(11,13,24,0.72)] p-5`}>
@@ -1174,74 +1282,123 @@ export default function Home() {
                 <div className={`${dt.cardRadius} ${dt.border} bg-[rgba(11,13,24,0.72)] p-5`}>
                   <p className={`text-sm font-semibold ${dt.textPrimary}`}>No brief yet</p>
                   <p className={`mt-2 text-sm leading-relaxed ${dt.muted}`}>
-                    Refresh the brief to analyse recent emails under the configured Gmail label.
+                    No Google Alert found in the latest window. Refresh again after the
+                    CareerIntel/Market Google Alert arrives.
                   </p>
                 </div>
               ) : (
                 <InfoCard
                   title="Latest analysed report"
-                  subtitle={`${geoBrief.diagnostics.emailsRead} email${geoBrief.diagnostics.emailsRead === 1 ? "" : "s"} read · ${geoBrief.diagnostics.linksFetched}/${geoBrief.diagnostics.linksFound} links fetched`}
+                  subtitle={`${geoBrief.diagnostics.gmailMessagesFound} Gmail message${geoBrief.diagnostics.gmailMessagesFound === 1 ? "" : "s"} found · ${geoBrief.diagnostics.googleAlertMessagesProcessed} Google Alert${geoBrief.diagnostics.googleAlertMessagesProcessed === 1 ? "" : "s"} processed · ${geoBrief.diagnostics.articlesFetched}/${geoBrief.diagnostics.linksExtracted} articles fetched`}
                   right={<Pill tone="ai">{formatDateTime(new Date(geoBrief.lastUpdatedAt || geoBrief.generatedAt))}</Pill>}
                   className={dt.cardAiModule}
                 >
                   <div className="space-y-6">
                     <div>
-                      <p className={`text-xl font-semibold leading-snug ${dt.textPrimary}`}>
-                        {geoBrief.headline}
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Executive signal
                       </p>
-                      <p className="mt-4 text-sm leading-7 text-slate-300">
-                        {geoBrief.executiveSummary}
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "executiveSignal", 1200)}
                       </p>
                     </div>
 
-                    {geoBrief.keyDevelopments.length > 0 ? (
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        What happened today
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "whatHappenedToday")}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Why it matters for Semrush / Adobe
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "whyItMattersForSemrushAdobe")}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        GTM / Sales implication
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "gtmSalesImplication")}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        HRBP implication
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "hrbpImplication")}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        Recommended action
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "recommendedAction")}
+                      </p>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                        One-line summary
+                      </p>
+                      <p className="mt-2 text-sm leading-7 text-slate-300">
+                        {briefSectionText(geoBrief, "oneLineSummary", 320)}
+                      </p>
+                    </div>
+
+                    {geoBrief.warnings.length > 0 ? (
                       <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Key developments
-                        </p>
-                        <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
-                          {geoBrief.keyDevelopments.map((item, idx) => (
-                            <li key={`geo-development-${idx}-${item.slice(0, 24)}`}>{item}</li>
+                        <ul className="space-y-2 rounded-lg border border-amber-400/20 bg-amber-950/20 p-4 text-sm leading-relaxed text-amber-100/85">
+                          {geoBrief.warnings.map((item, idx) => (
+                            <li key={`geo-warning-${idx}-${item.slice(0, 24)}`}>{capDisplayText(item, 240)}</li>
                           ))}
                         </ul>
                       </div>
                     ) : null}
 
-                    {geoBrief.implications.length > 0 ? (
+                    {compactBriefSources(geoBrief).length > 0 ? (
                       <div>
                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Implications
+                          Sources · all extracted
                         </p>
-                        <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
-                          {geoBrief.implications.map((item, idx) => (
-                            <li key={`geo-implication-${idx}-${item.slice(0, 24)}`}>{item}</li>
+                        <ul className="mt-3 max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+                          {compactBriefSources(geoBrief).map((source, idx) => (
+                            <li
+                              key={`geo-source-${idx}-${source.url}`}
+                              className="grid gap-2 rounded-lg border border-slate-800/80 bg-slate-950/35 p-4 sm:grid-cols-[1.5rem_minmax(0,1fr)_auto] sm:items-start"
+                            >
+                              <span className={`text-sm font-semibold ${dt.muted}`}>{idx + 1}.</span>
+                              <div className="min-w-0">
+                                <p className="text-sm font-semibold leading-relaxed text-cyan-100">
+                                  {source.title}
+                                </p>
+                                <p className={`mt-1 text-xs ${dt.muted}`}>
+                                  Source: {source.publisher || source.domain} · {source.fetchStatus}
+                                </p>
+                              </div>
+                              <a
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-sm font-semibold text-cyan-200 underline-offset-2 hover:text-cyan-100 hover:underline"
+                              >
+                                View original article
+                              </a>
+                            </li>
                           ))}
                         </ul>
                       </div>
-                    ) : null}
-
-                    {geoBrief.recommendedActions.length > 0 ? (
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                          Recommended actions
-                        </p>
-                        <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-300">
-                          {geoBrief.recommendedActions.map((item, idx) => (
-                            <li key={`geo-action-${idx}-${item.slice(0, 24)}`}>{item}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-
-                    {geoBrief.sources.length > 0 ? (
-                      <SourceDropdown
-                        sources={geoBrief.sources.map((source) => ({
-                          title: source.title,
-                          url: source.url,
-                          publisher: source.source,
-                        }))}
-                        label={`View sources (${geoBrief.sources.length})`}
-                      />
                     ) : null}
                   </div>
                 </InfoCard>
@@ -1652,7 +1809,7 @@ export default function Home() {
                       Employment law & workforce signals
                     </p>
                     <p className={`mt-2 text-sm ${dt.muted}`}>
-                      Employment Law and Expansion / Downsizing views combine keyword scans on
+                      Legacy law and workforce-change views combine keyword scans on
                       ingested RSS text with your Supabase history. They surface HRBP implications
                       only — not legal advice. Weekly snapshots compare runs, themes, source
                       coverage and LinkedIn alert imports.

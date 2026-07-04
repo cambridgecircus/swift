@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "gmail:auth": "node scripts/gmail-oauth-token.mjs",
     "lint": "eslint"
   },
   "dependencies": {

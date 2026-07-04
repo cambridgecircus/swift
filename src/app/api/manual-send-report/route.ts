@@ -1,5 +1,8 @@
 import { jsonResponseNoStore } from "@/lib/httpNoStore";
-import { generateSwiftIntelligenceReport } from "@/lib/swiftIntelligenceReport";
+import {
+  generateGeoAiDailyBrief,
+  getGeoAiBriefErrorDebug,
+} from "@/lib/geoAiDailyBrief";
 
 export const dynamic = "force-dynamic";
 
@@ -18,24 +21,33 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await generateSwiftIntelligenceReport({ source: "manual", sendEmail: true });
+    const result = await generateGeoAiDailyBrief({
+      trigger: "manual",
+      sendEmail: true,
+      forceSendEmail: true,
+    });
     return jsonResponseNoStore({
       status: "ok",
       ok: true,
-      message: "Manual report generated and email attempted successfully.",
+      message:
+        result.message ||
+        (result.brief?.email.sent
+          ? "Manual GEO x AI brief generated and email sent."
+          : "Manual GEO x AI brief generated; email was not sent."),
       storage: result.storage,
-      report: result.dashboardReport,
-      rawReport: result.report,
-      emailStatus: result.emailStatus,
-      emailMessageId: result.emailMessageId,
-      triageUsed: result.triageUsed,
-      gmailIntelDiagnostics: result.gmailIntelDiagnostics ?? null,
+      report: result.brief,
+      empty: result.empty === true,
+      emailStatus: result.brief?.email.sent ? "sent" : result.brief?.email.error ? "failed" : "skipped",
+      emailMessageId: result.brief?.email.messageId,
+      debug: process.env.NODE_ENV === "development" ? result.debug : undefined,
     });
   } catch (error) {
+    const debug = getGeoAiBriefErrorDebug(error);
     return jsonResponseNoStore(
       {
         status: "error",
         message: `Manual send failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        debug: process.env.NODE_ENV === "development" ? debug : undefined,
       },
       { status: 500 },
     );
