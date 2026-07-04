@@ -42,13 +42,16 @@ The Dashboard tab generates the GEO x AI Daily Brief from Google Alert emails in
 
 `CareerIntel/Market`
 
-The refresh and scheduled runs only process messages from `googlealerts-noreply@google.com`, extract the original alert links, fetch readable article content where possible, analyse the evidence with OpenAI structured JSON, update the Dashboard, and send the HTML digest to `cambridgecircus@gmail.com` under Gmail label:
+The refresh and scheduled runs only process messages from `googlealerts-noreply@google.com`, extract the original alert links, fetch readable article content where possible, analyse the evidence with the configured AI provider, update the Dashboard, and send the HTML digest to `cambridgecircus@gmail.com` under Gmail label:
 
 `Daily Career Intel Digest for ChatGPT`
 
 Required Vercel environment variables:
 
-- `OPENAI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `DEEPSEEK_BASE_URL=https://api.deepseek.com`
+- `DEEPSEEK_MODEL=deepseek-chat`
+- `AI_PROVIDER=deepseek`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_REFRESH_TOKEN`
@@ -60,13 +63,14 @@ Required Vercel environment variables:
 
 Optional environment variables:
 
-- `OPENAI_MODEL=gpt-4.1-mini`
-- `OPENAI_BASE_URL` if using an OpenAI-compatible chat-completions base URL
+- `OPENAI_API_KEY` only if `AI_PROVIDER=openai`
+- `OPENAI_MODEL=gpt-4.1-mini` only if `AI_PROVIDER=openai`
+- `OPENAI_BASE_URL` only if using an OpenAI-compatible chat-completions base URL
 - `GMAIL_APP_PASSWORD` for older non-Dashboard Gmail utilities that still use app-password auth
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
-Refresh validates the Gmail API profile before searching, then uses that same Gmail API credential to read alerts, send the digest, and apply the digest label. If `GOOGLE_REFRESH_TOKEN` belongs to any account other than `cambridgecircus@gmail.com`, the Dashboard debug box will stop the run and show the authenticated account that needs replacing.
+Refresh validates the Gmail API profile before searching, then uses that same Gmail API credential to read alerts, send the digest, and apply the digest label. If `GOOGLE_REFRESH_TOKEN` belongs to any account other than `cambridgecircus@gmail.com`, the Dashboard debug box will stop the run and show the authenticated account that needs replacing. If the AI provider fails, SWIFT saves and emails a fallback GEO brief from Google Alert titles, snippets, and fetched article text.
 
 ### Generate a Gmail OAuth Refresh Token Locally
 

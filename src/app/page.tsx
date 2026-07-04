@@ -30,12 +30,6 @@ import type { LiveLearningAsset, LiveSkillToPickUp, LiveSkillsAndLearningResult 
 import { normalizeDashboardReport, type DashboardReport } from "@/lib/dashboardReportMapper";
 import type { GeoAiDailyBrief, GeoAiDailyBriefDebug } from "@/lib/geoAiDailyBrief";
 
-type DashboardBrief = {
-  title: string;
-  headline: string;
-  signals: string[];
-};
-
 type GeoBriefResponse = {
   ok?: boolean;
   report?: GeoAiDailyBrief | null;
@@ -52,26 +46,6 @@ const SOURCE_TOPIC_LABEL: Record<string, string> = {
   hr: "HR & people",
   jobs: "Jobs",
   learning: "Learning",
-};
-
-const web3AiBrief: DashboardBrief = {
-  title: "Web3 x AI Daily Brief",
-  headline: "Operators are replacing hype with execution discipline.",
-  signals: [
-    "Compliance-ready growth is becoming a hiring constraint, not a side note.",
-    "AI adoption is shifting from tooling to operating model redesign.",
-    "Lean teams are prioritising role criticality and decision quality.",
-  ],
-};
-
-const hrbpBrief: DashboardBrief = {
-  title: "HRBP Daily Brief",
-  headline: "Executives want fewer dashboards and more decisions.",
-  signals: [
-    "Capability mapping is the new baseline for hiring plans.",
-    "Performance cadence is moving to shorter, signal-driven loops.",
-    "People analytics must translate into actions, not observations.",
-  ],
 };
 
 function cleanTextArray(input: Array<string | null | undefined>, limit = 5): string[] {
@@ -1005,44 +979,6 @@ export default function Home() {
     return weeklySummary.totalLiveJobs;
   }, [weeklySummary]);
 
-  const web3AiBriefToShow = useMemo(() => {
-    const rep = dashboardReport?.web3AiBrief;
-    if (rep) {
-      return {
-        title: web3AiBrief.title,
-        headline: rep.headline || web3AiBrief.headline,
-        signals: rep.signals.length > 0 ? rep.signals : [],
-      };
-    }
-    return {
-      title: web3AiBrief.title,
-      headline: "No live SWIFT Intel run is loaded.",
-      signals: [
-        "SWIFT expects Gmail SWIFT Intel to be ingested, triaged by AI, saved, then displayed here.",
-        "This view has no saved live run available, so real-time signals are not being shown.",
-      ],
-    };
-  }, [dashboardReport]);
-
-  const hrbpBriefToShow = useMemo(() => {
-    const rep = dashboardReport?.hrbpBrief;
-    if (rep) {
-      return {
-        title: hrbpBrief.title,
-        headline: rep.headline || hrbpBrief.headline,
-        signals: rep.signals.length > 0 ? rep.signals : [],
-      };
-    }
-    return {
-      title: hrbpBrief.title,
-      headline: "No AI-triaged HRBP brief is loaded.",
-      signals: [
-        "Run generation in an environment with Gmail, AI, and storage configured to populate this card.",
-        "Until a saved run exists, this dashboard should not be treated as live intelligence.",
-      ],
-    };
-  }, [dashboardReport]);
-
   async function generateLatestReport() {
     console.info("[DASHBOARD] manual generate started");
     try {
@@ -1793,7 +1729,7 @@ export default function Home() {
                       Employment law & workforce signals
                     </p>
                     <p className={`mt-2 text-sm ${dt.muted}`}>
-                      Employment Law and Expansion / Downsizing views combine keyword scans on
+                      Legacy law and workforce-change views combine keyword scans on
                       ingested RSS text with your Supabase history. They surface HRBP implications
                       only — not legal advice. Weekly snapshots compare runs, themes, source
                       coverage and LinkedIn alert imports.
