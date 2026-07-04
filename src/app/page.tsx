@@ -1245,7 +1245,7 @@ export default function Home() {
                       disabled={geoBriefRefreshing}
                       className={dt.primaryCta}
                     >
-                      {geoBriefRefreshing ? "Refreshing brief..." : "Refresh brief"}
+                      {geoBriefRefreshing ? "Refreshing brief..." : "Refresh Brief"}
                     </button>
                     <p className={`text-xs ${dt.muted}`}>
                       Last updated: {formatDateTime(lastRefreshedAt)}
@@ -1261,8 +1261,6 @@ export default function Home() {
                   <p className="text-sm leading-relaxed text-emerald-100">{geoBriefNotice}</p>
                 </div>
               ) : null}
-
-              <GeoBriefDebugBox debug={geoBriefDebug} />
 
               {geoBriefLoading ? (
                 <div className={`${dt.cardRadius} ${dt.border} bg-[rgba(11,13,24,0.72)] p-5`}>
@@ -1403,6 +1401,8 @@ export default function Home() {
                   </div>
                 </InfoCard>
               )}
+
+              <GeoBriefDebugBox debug={geoBriefDebug} />
             </div>
           ) : null}
           {active === "jobOpportunities" ? (

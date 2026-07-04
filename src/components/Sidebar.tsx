@@ -120,16 +120,6 @@ function SidebarInner({
         <NavList active={active} items={items} onSelect={handleSelect} />
       </nav>
 
-      <div className="px-5 pb-6">
-        <div
-          className={`${dt.cardRadius} ${dt.border} border-[color:var(--swift-border-subtle)] bg-[rgba(17,19,34,0.45)] p-4 shadow-[inset_0_1px_0_0_rgba(254,44,85,0.05)]`}
-        >
-          <p className={`text-xs font-semibold ${dt.textPrimary}`}>Premium workspace</p>
-          <p className={`mt-1 text-xs leading-5 ${dt.muted}`}>
-            Built for HRBP operators navigating Web3 x AI shifts.
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
